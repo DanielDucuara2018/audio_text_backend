@@ -1,0 +1,26 @@
+version: "3.7"
+
+networks:
+  audio_text_bridge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 169.254.9.0/24
+
+services:
+  app:
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+    networks:
+      audio_text_bridge:
+        ipv4_address: 169.254.9.2
+        aliases:
+          - "audio-text-backend.portafolio"
+    ports:
+      - 3203:3203
+    volumes:
+      - ./:/app/
+      - /tmp/uploads/:/tmp/uploads/
+      - /tmp/transcriptions/:/tmp/transcriptions/
+      - /app/audio_text_backend.egg-info/
