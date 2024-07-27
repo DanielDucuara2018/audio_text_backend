@@ -16,7 +16,7 @@ services:
       audio_text_bridge:
         ipv4_address: 169.254.9.2
         aliases:
-          - "audio-text-backend.portafolio"
+          - "audio-text-backend.app"
     ports:
       - 3203:3203
     volumes:
