@@ -5,7 +5,7 @@ VERSION = "0.1"
 INSTALL_REQUIRES = [
     "fastapi[all]==0.92.0",
     "openai-whisper==20231117",
-    "setuptools-rust==1.9.0"
+    "setuptools-rust==1.9.0",
 ]
 
 setup(
@@ -17,9 +17,7 @@ setup(
     author_email="daniel14015@gmail.com",
     description="Get text from audio",
     include_package_data=True,
-    entry_points={
-        "console_scripts": []
-    },
+    entry_points={"console_scripts": []},
     install_requires=INSTALL_REQUIRES,
     extras_require={
         "dev": [

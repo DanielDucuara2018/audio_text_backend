@@ -23,6 +23,7 @@ app.add_middleware(
 
 app.include_router(audio_router)
 
+
 @app.get("/")
 async def root():
     return {"message": "Welcome to audio_text app"}
