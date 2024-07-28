@@ -1,5 +1,4 @@
 import logging
-from asyncio import sleep
 from multiprocessing import Process
 from pathlib import Path
 
@@ -30,7 +29,7 @@ def run_trascription(file_path: Path, mode: str, transcription_filename: str):
     final_file_path.write_text(text)
 
 
-@router.post("/upload/")
+@router.post("/upload")
 async def upload(file: UploadFile):
     filename = file.filename
     name, extension = filename.split(".")
@@ -38,12 +37,12 @@ async def upload(file: UploadFile):
     file_path = UPLOAD_DIR_PATH.joinpath(new_filename)
     logger.info("file %s is uploading into %s", filename, file_path)
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_bytes(await file.read())
-    await sleep(1)  # TODO check if the file exists on frontend side
+    file_data = await file.read()
+    file_path.write_bytes(file_data)
     return {"filename": new_filename}
 
 
-@router.post("/transcribe/")
+@router.post("/transcribe")
 async def transcribe(data: fileRequest):
     filename = data.filename
     file_path = UPLOAD_DIR_PATH.joinpath(filename)
@@ -57,11 +56,10 @@ async def transcribe(data: fileRequest):
     return {"transcription_filename": transcription_filename}
 
 
-@router.get("/transcription/")
+@router.get("/transcription")
 async def get_transcription(filename: str):
     file_path = TRANSCRIPTION_DIR_PATH.joinpath(filename)
     text = None
     if file_path.exists():
         text = file_path.read_text(encoding="utf-8")
-    await sleep(1)  # TODO check if the file exists on frontend side
     return {"transcription": text}
