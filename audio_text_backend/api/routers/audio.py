@@ -2,8 +2,10 @@ import logging
 from multiprocessing import Process
 from pathlib import Path
 
+import magic
 import whisper
 from fastapi import APIRouter, UploadFile
+from fastapi.responses import FileResponse
 
 from audio_text_backend.schema import fileRequest
 from audio_text_backend.utils import generate_random_name
@@ -63,3 +65,11 @@ async def get_transcription(filename: str):
     if file_path.exists():
         text = file_path.read_text(encoding="utf-8")
     return {"transcription": text}
+
+
+@router.get("/data")
+async def get_transcription(filename: str):
+    file_path = UPLOAD_DIR_PATH.joinpath(filename)
+    content_type = magic.Magic(mime=True).from_file(file_path)
+    logger.info("Sending data of file %s wiht content type %s", file_path, content_type)
+    return FileResponse(file_path, media_type=content_type)

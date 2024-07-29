@@ -6,6 +6,7 @@ INSTALL_REQUIRES = [
     "fastapi[all]==0.92.0",
     "openai-whisper==20231117",
     "setuptools-rust==1.9.0",
+    "python-magic==0.4.27",
 ]
 
 setup(
