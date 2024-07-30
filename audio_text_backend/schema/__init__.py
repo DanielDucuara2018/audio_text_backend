@@ -1,1 +1,1 @@
-from .file import fileRequest
+from .file import fileRequest, terminateRequest

@@ -1,4 +1,6 @@
 import logging
+import os
+import signal
 from multiprocessing import Process
 from pathlib import Path
 
@@ -7,7 +9,7 @@ import whisper
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import FileResponse
 
-from audio_text_backend.schema import fileRequest
+from audio_text_backend.schema import fileRequest, terminateRequest
 from audio_text_backend.utils import generate_random_name
 
 logger = logging.getLogger(__name__)
@@ -22,7 +24,7 @@ router = APIRouter(
 )
 
 
-def run_trascription(file_path: Path, mode: str, transcription_filename: str):
+def run_trascription(file_path: Path, mode: str, transcription_filename: str) -> None:
     model = whisper.load_model(mode)
     result = model.transcribe(str(file_path))
     text = result["text"]
@@ -55,7 +57,15 @@ async def transcribe(data: fileRequest):
         target=run_trascription, args=(file_path, data.mode, transcription_filename)
     )
     process.start()
-    return {"transcription_filename": transcription_filename}
+    return {
+        "transcription_filename": transcription_filename,
+        "pid_process": process.pid,
+    }
+
+
+@router.post("/terminate")
+async def terminate_transcription(data: terminateRequest) -> None:
+    os.kill(data.pid, signal.SIGKILL)
 
 
 @router.get("/transcription")
@@ -68,7 +78,7 @@ async def get_transcription(filename: str):
 
 
 @router.get("/data")
-async def get_transcription(filename: str):
+async def get_transcription(filename: str) -> FileResponse:
     file_path = UPLOAD_DIR_PATH.joinpath(filename)
     content_type = magic.Magic(mime=True).from_file(file_path)
     logger.info("Sending data of file %s wiht content type %s", file_path, content_type)
