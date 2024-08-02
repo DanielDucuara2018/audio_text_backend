@@ -7,7 +7,7 @@ from pathlib import Path
 import magic
 import whisper
 from fastapi import APIRouter, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 
 from audio_text_backend.schema import fileRequest, terminateRequest
 from audio_text_backend.utils import generate_random_name
@@ -78,8 +78,13 @@ async def get_transcription(filename: str):
 
 
 @router.get("/data")
-async def get_transcription(filename: str) -> FileResponse:
+async def get_audio_data(filename: str) -> StreamingResponse:
     file_path = UPLOAD_DIR_PATH.joinpath(filename)
     content_type = magic.Magic(mime=True).from_file(file_path)
     logger.info("Sending data of file %s wiht content type %s", file_path, content_type)
-    return FileResponse(file_path, media_type=content_type)
+
+    def iterfile():
+        with open(file_path, "rb") as f:
+            yield from f
+
+    return StreamingResponse(iterfile(), media_type=content_type)
