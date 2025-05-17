@@ -1,38 +1,103 @@
-# audio to text app
+# Audio to Text Backend
 
-Extract the text from an audio file using whisper lib
+This repository contains the backend component of an Audio-to-Text application. It provides an API service that processes audio files and returns their transcriptions using OpenAI's Whisper library.
 
-## pre-commit
+## Features
 
-```bash
-pip install --user pre-commit
-pre-commit install
-pre-commit run --all-files
-```
+* Accepts audio file uploads via API endpoints
+* Processes audio files to extract text using Whisper
+* Provides transcribed text responses
+* Dockerized for easy deployment
 
-## pytho venv
+## Technologies Used
 
-```bash
-python3.9 -m venv venv
-```
+* Python 3.9
+* Whisper (OpenAI)
+* Docker & Docker Compose
+* Supervisor (for process management)
 
-## generate docker containers
+## Getting Started
+
+### Prerequisites
+
+* Python 3.9
+* Docker and Docker Compose
+* `pre-commit` installed globally (optional, for code quality checks)
+
+### Installation
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/DanielDucuara2018/audio_text_backend.git
+   cd audio_text_backend
+   ```
+   
+2. Set up a virtual environment (optional):
+
+   ```bash
+   python3.9 -m venv venv
+   source venv/bin/activate
+   ```
+   
+3. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Set up pre-commit hooks (optional):
+
+   ```bash
+   pip install --user pre-commit
+   pre-commit install
+   pre-commit run --all-files
+   ```
+
+### Running the Application
+
+You can run the application using Docker Compose:
 
 ```bash
 docker-compose up -d --build
 ```
 
-## forwarding ports
+This will build and start the backend service in detached mode.
 
-Create a host name for report-calculation application:
+### Port Forwarding (Optional)
 
-```bash
-sudo nano /etc/hosts
+If you need to forward ports from a remote host:
+
+1. Edit your `/etc/hosts` file:
+
+   ```bash
+   sudo nano /etc/hosts
+   ```
+
+Add the following line:
+
+```
 169.254.9.2 audio-text
 ```
 
-Forward port in host machine:
+2. Set up SSH port forwarding:
 
-```bash
-ssh -L 127.0.0.1:3203:audio-text:3203 username@ip_address
-```
+   ```bash
+   ssh -L 127.0.0.1:3203:audio-text:3203 username@ip_address
+   ```
+
+## Project Structure
+
+* `audio_text_backend/` - Main application code
+* `Dockerfile` - Docker configuration
+* `docker-compose.yml` - Docker Compose setup
+* `supervisord.conf` - Supervisor configuration
+* `pyproject.toml` and `setup.py` - Python project configurations
+
+## Contributing
+
+Contributions are welcome! Please fork the repository and submit a pull request with your changes.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
