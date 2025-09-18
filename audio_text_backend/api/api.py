@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from audio_text_backend.api.routers.audio import router as audio_router
+from audio_text_backend.db import initialize
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -11,7 +12,11 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI()
+API_PREFIX = "/api/v1"
+
+initialize(True)
+
+app = FastAPI(title="Audio Text Backend", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,9 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(audio_router)
+app.include_router(audio_router, prefix=API_PREFIX)
 
 
-@app.get("/")
+@app.get(API_PREFIX)
 async def root():
     return {"message": "Welcome to audio_text app"}
