@@ -19,9 +19,12 @@ services:
       - 3203:3203
     volumes:
       - ./:/app/
-      - /tmp/uploads/:/tmp/uploads/
-      - /tmp/transcriptions/:/tmp/transcriptions/
       - /app/audio_text_backend.egg-info/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   postgres:
     image: postgres:17.1-alpine
@@ -29,7 +32,7 @@ services:
       audio_text_bridge:
         ipv4_address: 169.254.9.3
         aliases:
-          - "audio-text.db"
+          - "audio-text-backend.db"
     ports:
       - 5432:5432
     environment:
@@ -44,25 +47,63 @@ services:
 
   redis:
     image: redis:7-alpine
+    networks:
+      audio_text_bridge:
+        ipv4_address: 169.254.9.4
+        aliases:
+          - "audio-text-backend.cache"
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # minio:
-  #   image: minio/minio:latest
+  celery-worker:
+    build: ./
+    networks:
+      audio_text_bridge:
+        ipv4_address: 169.254.9.5
+        aliases:
+          - "audio-text-backend.celery"
+    volumes:
+      - ./:/app/
+    environment:
+      - CELERY_BROKER_URL=redis://audio-text-backend.cache:6379/0
+      - CELERY_RESULT_BACKEND=redis://audio-text-backend.cache:6379/0
+      - C_FORCE_ROOT="true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A audio_text_backend.celery.app worker --loglevel=info -Q audio_processing
+
+  # TODO not working yet, connection to redis issue
+  # flower:
+  #   image: mher/flower:2.0
+  #   networks:
+  #     audio_text_bridge:
+  #       ipv4_address: 169.254.9.6
+  #       aliases:
+  #         - "audio-text-backend.flower"
   #   ports:
-  #     - "9000:9000"
-  #     - "9001:9001"
+  #     - "5555:5555"
   #   environment:
-  #     MINIO_ACCESS_KEY: minioadmin
-  #     MINIO_SECRET_KEY: minioadmin
-  #   command: server /data --console-address ":9001"
-  #   volumes:
-  #     - minio_data:/data
+  #     - CELERY_BROKER_URL=redis://audio-text-backend.cache:6379/0
+  #     - FLOWER_PORT=5555
+  #     - C_FORCE_ROOT="true"
+  #   depends_on:
+  #     redis:
+  #       condition: service_healthy
+  #     celery-worker:
+  #       condition: service_started
+  #   command: celery flower --broker=redis://audio-text-backend.cache:6379/0 --port=5555
 
 volumes:
   redis_data:
   postgres_data:
-  # minio_data:

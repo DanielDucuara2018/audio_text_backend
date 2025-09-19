@@ -12,8 +12,9 @@ from alembic.command import upgrade
 from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from audio_text_backend.config import Config, Database, logging
-from audio_text_backend.errors import DBError
+
+from .config import Config, Database, logging
+from .errors import DBError
 
 ROOT = Path(__file__).parents[1]
 ALEMBIC_PATH = ROOT.joinpath("alembic")
@@ -75,7 +76,7 @@ def create(conn: Connection, table_name: str, force: bool) -> bool:
             raise
 
     if not exists or force:
-        from audio_text_backend.model import Base
+        from .model import Base
 
         logger.info("Creating all tables %s", list(Base.metadata.tables))
         Base.metadata.create_all(bind=conn)
@@ -122,16 +123,12 @@ def initialize(update_schema: bool = False) -> None:
             raise RuntimeError("Database is not up-to-date")
 
 
-def get_session() -> Session:
-    """Get a new database session."""
-    session_factory = init()
-    return session_factory()
+session = open_session(init())
 
 
 @contextmanager
 def session_scope():
     """Provide a transactional scope around a series of operations."""
-    session = get_session()
     try:
         yield session
         session.commit()
@@ -139,5 +136,3 @@ def session_scope():
         session.rollback()
         logger.error(f"Session rollback due to exception: {e}")
         raise DBError()
-    finally:
-        session.close()

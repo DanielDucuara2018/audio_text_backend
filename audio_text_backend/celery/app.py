@@ -16,5 +16,22 @@ celery_app.conf.update(
     timezone="UTC",
     enable_utc=True,
     task_track_started=True,
-    task_routes={"audio_text_backend.action.tasks.process_audio": {"queue": "audio_processing"}},
+    # Enhanced retry and reliability settings
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    task_default_retry_delay=60,  # 1 minute
+    task_max_retries=3,
+    # Dead letter queue for failed tasks
+    task_routes={
+        "audio_text_backend.action.tasks.process_audio": {
+            "queue": "audio_processing",
+            "retry": True,
+            "retry_policy": {
+                "max_retries": 3,
+                "interval_start": 0,
+                "interval_step": 60,
+                "interval_max": 300,
+            },
+        }
+    },
 )
