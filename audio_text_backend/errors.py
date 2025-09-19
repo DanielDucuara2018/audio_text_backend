@@ -29,3 +29,27 @@ class NoDataFound(Error):
     code = 1000
     reason = "no-data-found"
     description = "No data found in DB."
+
+
+class FileValidationError(Error):
+    code = 1100
+    reason = "file-validation-error"
+    description = "File validation failed."
+
+
+class FileProcessingError(Error):
+    code = 1200
+    reason = "file-processing-error"
+    description = "Error occurred while processing file."
+
+
+class StorageError(Error):
+    code = 1300
+    reason = "storage-error"
+    description = "Error occurred while accessing storage."
+
+
+class TranscriptionError(Error):
+    code = 1400
+    reason = "transcription-error"
+    description = "Error occurred during audio transcription."

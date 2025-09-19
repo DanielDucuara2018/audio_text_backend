@@ -93,22 +93,29 @@ class Base(DeclarativeBase):
             if not (result := query.get(kwargs)):
                 if error := cls.__errors__.get("_error"):
                     raise error(**kwargs)
-                raise NoDataFound(key=kwargs, messages="Not data found in DB")
+                raise NoDataFound(key=kwargs, messages="No data found in DB")
             return result
 
     def update(self: T, force_update: bool = False, **kwargs) -> T:
-        with db.session_scope():
+        with db.session_scope() as session:
+            # Merge the object into the session
+            merged_obj = session.merge(self)
             for key, value in kwargs.items():
                 if force_update or value is not None:
-                    setattr(self, key, value)
-        return self
+                    setattr(merged_obj, key, value)
+                    # setattr(self, key, value)
+            session.flush()
+        return merged_obj
 
     def create(self: T) -> T:
         with db.session_scope() as session:
             session.add(self)
+            session.flush()
+            session.refresh(self)
         return self
 
     def delete(self: T) -> T:
         with db.session_scope() as session:
-            session.delete(self)
+            merged_obj = session.merge(self)
+            session.delete(merged_obj)
         return self

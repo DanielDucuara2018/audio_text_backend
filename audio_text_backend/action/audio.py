@@ -5,6 +5,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from audio_text_backend.config import Config
+from audio_text_backend.errors import FileValidationError, StorageError
 
 logger = logging.getLogger(__name__)
 
@@ -12,18 +13,26 @@ logger = logging.getLogger(__name__)
 def validate_audio_file(filename: str, content_type: str, file_size: int) -> None:
     """Validate uploaded audio file."""
     # Check file size
-    if file_size > int(Config.file.max_size_mb) * 1024 * 1024:
-        raise Exception(f"File size exceeds {Config.file.max_size_mb}MB limit")
+    max_size_mb = int(Config.file.max_size_mb)
+    if file_size > max_size_mb * 1024 * 1024:
+        raise FileValidationError(
+            message=f"File size exceeds {max_size_mb}MB limit",
+            file_size=file_size,
+            max_size=max_size_mb * 1024 * 1024,
+        )
 
     # Basic audio type check
     if not content_type.startswith("audio/"):
-        raise Exception("File must be an audio file")
+        raise FileValidationError(message="File must be an audio file", content_type=content_type)
 
     # Check extension
     extension = filename.split(".")[-1].lower()
-    if extension not in Config.file.allowed_audio_extensions.split(","):
-        raise Exception(
-            f"Unsupported audio format. Allowed: {Config.file.allowed_audio_extensions}"
+    allowed_extensions = Config.file.allowed_audio_extensions.split(",")
+    if extension not in allowed_extensions:
+        raise FileValidationError(
+            message=f"Unsupported audio format. Allowed: {Config.file.allowed_audio_extensions}",
+            extension=extension,
+            allowed_extensions=allowed_extensions,
         )
 
 
@@ -41,7 +50,7 @@ class S3Storage:
         self._ensure_bucket_exists()
 
     def _ensure_bucket_exists(self):
-        """Create bucket if it doesn"t exist."""
+        """Create bucket if it doesn't exist."""
         try:
             self.client.head_bucket(Bucket=self.bucket_name)
         except ClientError as e:
@@ -54,16 +63,16 @@ class S3Storage:
             logger.info(f"Created S3 bucket: {self.bucket_name}")
         except ClientError as e:
             logger.error(f"Failed to create bucket: {e}")
-            raise Exception("Could not create S3 bucket") from e
+            raise StorageError(message="Could not create S3 bucket", error=str(e))
 
     def download_file(self, key: str, file_path: Path) -> None:
         """Download file from S3."""
         try:
-            self.client.download_file(self.bucket_name, key, file_path)
+            self.client.download_file(self.bucket_name, key, str(file_path))
             logger.info(f"Downloaded file from S3: {key}")
         except ClientError as e:
             logger.error(f"Failed to download file from S3: {e}")
-            raise Exception("Could not download file from S3") from e
+            raise StorageError(message="Could not download file from S3", key=key, error=str(e))
 
     def delete_file(self, key: str) -> None:
         """Delete file from S3."""
@@ -72,9 +81,19 @@ class S3Storage:
             logger.info(f"Deleted file from S3: {key}")
         except ClientError as e:
             logger.error(f"Failed to delete file from S3: {e}")
-            raise Exception("Could not delete file from S3") from e
+            raise StorageError(message="Could not delete file from S3", key=key, error=str(e))
 
-    def get_presigned_url(self, key: str, content_type: str, expiration: int = 3600) -> str | None:
+    def file_exists(self, key: str) -> bool:
+        """Check if file exists in S3."""
+        try:
+            self.client.head_object(Bucket=self.bucket_name, Key=key)
+            return True
+        except ClientError as e:
+            if e.response["Error"]["Code"] == "404":
+                return False
+            raise StorageError(message="Could not check file existence", key=key, error=str(e))
+
+    def get_presigned_url(self, key: str, content_type: str, expiration: int = 3600) -> str:
         """Generate presigned URL for file access."""
         try:
             return self.client.generate_presigned_url(
@@ -89,7 +108,7 @@ class S3Storage:
             )
         except ClientError as e:
             logger.error(f"Failed to generate presigned URL: {e}")
-            raise Exception("Could not generate presigned URL") from e
+            raise StorageError(message="Could not generate presigned URL", key=key, error=str(e))
 
 
 storage = S3Storage()
