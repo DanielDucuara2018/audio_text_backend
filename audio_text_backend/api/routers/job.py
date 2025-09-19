@@ -3,13 +3,12 @@ import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, ConfigDict
 
 from audio_text_backend.action.job import create as add_job
 from audio_text_backend.action.job import manager
 from audio_text_backend.errors import DBError, NoDataFound
-from audio_text_backend.model.transcription_job import JobStatus, TranscriptionJob
-from audio_text_backend.typing import CustomDateTime
+from audio_text_backend.model.transcription_job import TranscriptionJob
+from audio_text_backend.schema.job import TranscribeRequest, TranscribeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -18,25 +17,6 @@ router = APIRouter(
     tags=["job"],
     responses={404: {"description": "Not found"}},
 )
-
-
-class TranscribeRequest(BaseModel):
-    filename: str
-    mode: str
-    url: str
-
-
-class TranscribeResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    id: str
-    filename: str
-    status: JobStatus
-    creation_date: CustomDateTime
-    update_date: CustomDateTime | None = None
-    result_text: str | None = None
-    processing_time_seconds: float | None = None
-    error_message: str | None = None
 
 
 @router.post("/transcribe", response_model=TranscribeResponse)
