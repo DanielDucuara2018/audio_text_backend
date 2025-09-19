@@ -12,28 +12,51 @@ logger = logging.getLogger(__name__)
 
 def validate_audio_file(filename: str, content_type: str, file_size: int) -> None:
     """Validate uploaded audio file."""
-    # Check file size
+    _validate_file_size(file_size)
+    _validate_content_type(content_type)
+    _validate_file_extension(filename)
+
+
+def _validate_file_size(file_size: int) -> None:
+    """Validate that file size is within allowed limits."""
     max_size_mb = int(Config.file.max_size_mb)
-    if file_size > max_size_mb * 1024 * 1024:
+    max_size_bytes = max_size_mb * 1024 * 1024
+
+    if file_size > max_size_bytes:
         raise FileValidationError(
             message=f"File size exceeds {max_size_mb}MB limit",
             file_size=file_size,
-            max_size=max_size_mb * 1024 * 1024,
+            max_size=max_size_bytes,
         )
 
-    # Basic audio type check
+
+def _validate_content_type(content_type: str) -> None:
+    """Validate that the content type is an audio format."""
     if not content_type.startswith("audio/"):
         raise FileValidationError(message="File must be an audio file", content_type=content_type)
 
-    # Check extension
-    extension = filename.split(".")[-1].lower()
-    allowed_extensions = Config.file.allowed_audio_extensions.split(",")
+
+def _validate_file_extension(filename: str) -> None:
+    """Validate that the file extension is allowed."""
+    extension = _extract_file_extension(filename)
+    allowed_extensions = _get_allowed_extensions()
+
     if extension not in allowed_extensions:
         raise FileValidationError(
             message=f"Unsupported audio format. Allowed: {Config.file.allowed_audio_extensions}",
             extension=extension,
             allowed_extensions=allowed_extensions,
         )
+
+
+def _extract_file_extension(filename: str) -> str:
+    """Extract and normalize file extension from filename."""
+    return filename.split(".")[-1].lower()
+
+
+def _get_allowed_extensions() -> list[str]:
+    """Get list of allowed audio file extensions."""
+    return Config.file.allowed_audio_extensions.split(",")
 
 
 class S3Storage:
