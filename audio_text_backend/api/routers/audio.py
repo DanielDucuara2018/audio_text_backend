@@ -19,7 +19,9 @@ router = APIRouter(
 
 
 @router.get("/get_presigned_url", response_model=FileGeneratePresignedUrlResponse)
-async def get_presigned_url(filename: str, content_type: str, file_size: int):
+async def get_presigned_url(
+    filename: str, content_type: str, file_size: int
+) -> FileGeneratePresignedUrlResponse:
     try:
         validate_audio_file(filename, content_type, file_size)
         url = storage.get_presigned_url(filename, content_type)

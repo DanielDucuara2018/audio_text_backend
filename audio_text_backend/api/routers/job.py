@@ -1,11 +1,12 @@
 import logging
 
-from dev.audio_text_backend.audio_text_backend.action.tasks import process_audio
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from audio_text_backend.action.job import manager
+from audio_text_backend.action.tasks import process_audio
 from audio_text_backend.model.transcription_job import JobStatus, TranscriptionJob
+from audio_text_backend.typing import CustomDateTime
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +23,22 @@ class TranscribeRequest(BaseModel):
     url: str
 
 
-@router.post("/transcribe")
-async def transcribe(request: TranscribeRequest):
+class TranscribeResponse(BaseModel):
+    job_id: str
+    filename: str
+    status: str
+    message: str
+    creation_date: CustomDateTime
+    update_date: CustomDateTime | None = None
+    result: str | None = None
+    processing_time: float | None = None
+    error: str | None = None
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+async def transcribe(request: TranscribeRequest) -> TranscribeResponse:
     """Start audio transcription job."""
     try:
-        # Generate unique job ID and S3 key
         # Create job record in database
         job = TranscriptionJob(
             filename=request.filename, url=request.url, status=JobStatus.PENDING
@@ -35,43 +47,24 @@ async def transcribe(request: TranscribeRequest):
         # Start background processing with Celery
         process_audio.delay(job.id, request.mode)
 
-        return {
-            "job_id": job.id,
-            "filename": request.filename,
-            "status": JobStatus.PENDING.value,
-            "message": "Transcription job started successfully.",
-        }
-
+        return job
     except Exception as e:
         logger.error(f"Error creating transcription job: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to start transcription: {str(e)}")
 
 
-@router.get("/status/{job_id}")
-async def get_status(job_id: str):
+@router.get("/status/{job_id}", response_model=TranscribeResponse)
+async def get_status(job_id: str) -> TranscribeResponse:
     """Get transcription job status and results."""
     try:
-        job = TranscriptionJob.get(job_id)
-        response = {
-            "job_id": job.id,
-            "filename": job.filename,
-            "status": job.status.value,
-            "creation_date": job.creation_date,
-            "update_date": job.update_date,
-        }
-        if job.status == JobStatus.COMPLETED:
-            response["result"] = job.result_text
-            response["processing_time"] = job.processing_time_seconds
-        elif job.status == JobStatus.FAILED:
-            response["error"] = job.error_message
-        return response
+        return TranscriptionJob.get(job_id)
     except Exception as e:
         logger.error(f"Error getting job status: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get job status: {str(e)}")
 
 
-@router.get("/jobs")
-async def read():
+@router.get("/read", response_model=list[TranscribeResponse])
+async def read() -> list[TranscribeResponse]:
     """List all transcription jobs."""
     try:
         return TranscriptionJob.find()

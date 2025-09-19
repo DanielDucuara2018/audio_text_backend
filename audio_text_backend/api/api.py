@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from audio_text_backend.api.routers.audio import router as audio_router
+from audio_text_backend.api.routers.job import router as job_router
 from audio_text_backend.db import initialize
 
 logging.basicConfig(
@@ -27,7 +28,7 @@ app.add_middleware(
 )
 
 app.include_router(audio_router, prefix=API_PREFIX)
-
+app.include_router(job_router, prefix=API_PREFIX)
 
 @app.get(API_PREFIX)
 async def root():

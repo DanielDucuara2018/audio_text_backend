@@ -122,12 +122,16 @@ def initialize(update_schema: bool = False) -> None:
             raise RuntimeError("Database is not up-to-date")
 
 
-session = open_session(init())
+def get_session() -> Session:
+    """Get a new database session."""
+    session_factory = init()
+    return session_factory()
 
 
 @contextmanager
 def session_scope():
     """Provide a transactional scope around a series of operations."""
+    session = get_session()
     try:
         yield session
         session.commit()
@@ -135,3 +139,5 @@ def session_scope():
         session.rollback()
         logger.error(f"Session rollback due to exception: {e}")
         raise DBError()
+    finally:
+        session.close()

@@ -4,9 +4,9 @@ from datetime import datetime
 from pathlib import Path
 
 import whisper
-from celery import current_task
 
 from audio_text_backend.action.audio import storage
+from audio_text_backend.action.job import manager
 from audio_text_backend.celery.app import celery_app as app
 from audio_text_backend.model import JobStatus, TranscriptionJob
 
@@ -32,40 +32,57 @@ def get_whisper_model(model_name: str) -> whisper.Whisper:
 
 
 @app.task(bind=True)
-def process_audio(job_id: str, mode: str):
+async def process_audio(job_id: str, mode: str):
     """Process audio file and extract text using Whisper."""
     start_time = datetime.now()
-    # Get job from database
-    job = TranscriptionJob.get(id=job_id)
-    job.update(status=JobStatus.PROCESSING)
-    file_path = TMP_FOLDER.joinpath(job.filename)
+    file_path = None
+
     try:
-        # Update task progress
-        current_task.update_state(state="PROGRESS", meta={"progress": 10})
-        storage.download_file(job.filename, TMP_FOLDER.joinpath(job.filename))
+        # Get job from database
+        job = TranscriptionJob.get(id=job_id)
+        job.update(status=JobStatus.PROCESSING)
+
+        # Send WebSocket update
+        await manager.send_job_update(
+            job_id, {"job_id": job_id, "status": JobStatus.PROCESSING, "progress": 10}
+        )
+
+        file_path = TMP_FOLDER.joinpath(job.filename)
+
+        # Download file from S3
+        storage.download_file(job.filename, file_path)
+
+        # Send progress update
+        await manager.send_job_update(
+            job_id, {"job_id": job_id, "status": JobStatus.PROCESSING, "progress": 30}
+        )
 
         # Process with Whisper
-        current_task.update_state(state="PROGRESS", meta={"progress": 20})
         logger.info(f"Processing audio file: {job.filename} with model: {mode}")
         model = get_whisper_model(mode)
-        result = model.transcribe(file_path)
+        result = model.transcribe(str(file_path))
 
-        current_task.update_state(state="PROGRESS", meta={"progress": 90})
+        # Send progress update
+        await manager.send_job_update(
+            job_id, {"job_id": job_id, "status": JobStatus.PROCESSING, "progress": 90}
+        )
 
         # Calculate processing time
         processing_time = (datetime.now() - start_time).total_seconds()
 
         # Update job with results
-        job.status = JobStatus.COMPLETED
         job.update(
             status=JobStatus.COMPLETED,
             result_text=result["text"],
             processing_time_seconds=int(processing_time),
         )
 
-        current_task.update_state(
-            state="SUCCESS",
-            meta={
+        # Send completion update
+        await manager.send_job_update(
+            job_id,
+            {
+                "job_id": job_id,
+                "status": "completed",
                 "progress": 100,
                 "result": result["text"],
                 "processing_time": processing_time,
@@ -74,12 +91,25 @@ def process_audio(job_id: str, mode: str):
 
         logger.info(f"Successfully processed job {job_id} in {processing_time:.2f}s")
         return {"text": result["text"], "processing_time": processing_time}
+
     except Exception as e:
         logger.error(f"Error processing job {job_id}: {str(e)}")
-        job.update(status=JobStatus.FAILED, error_message=str(e))
-        current_task.update_state(state="FAILURE", meta={"error": str(e)})
-        raise Exception("Error processing audio file") from e
+
+        try:
+            job = TranscriptionJob.get(id=job_id)
+            job.update(status=JobStatus.FAILED, error_message=str(e))
+
+            # Send error update via WebSocket
+            await manager.send_job_update(
+                job_id, {"job_id": job_id, "status": "failed", "error": str(e)}
+            )
+        except Exception as update_error:
+            logger.error(f"Failed to update job status: {update_error}")
+
+        raise
+
     finally:
         # Clean up temp file if it exists
-        logger.info(f"Cleaned up temporary file: {file_path}")
-        file_path.unlink(missing_ok=True)
+        if file_path and file_path.exists():
+            file_path.unlink(missing_ok=True)
+            logger.info(f"Cleaned up temporary file: {file_path}")
