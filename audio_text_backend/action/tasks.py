@@ -58,161 +58,179 @@ def process_audio(job_id: str, filename: str, mode: str):
     file_path = None
 
     try:
-        # Get job from database
-        # job = TranscriptionJob.get(id=job_id)
-        # job.update(status=JobStatus.PROCESSING)
-
-        # Send Redis update
-        send_redis_update(
-            {
-                "job_id": job_id,
-                "status": "processing",
-                "progress": 10,
-                "message": "Starting transcription",
-                "type": "job_update",
-            },
-        )
-
-        file_path = TMP_FOLDER.joinpath(filename)
-
-        # Download file from S3
-        current_task.update_state(state="PROGRESS", meta={"progress": 20})
-        send_redis_update(
-            {
-                "job_id": job_id,
-                "status": "processing",
-                "progress": 20,
-                "message": "Downloading file",
-                "type": "job_update",
-            },
-        )
-
-        try:
-            storage.download_file(filename, file_path)
-        except StorageError as e:
-            raise FileProcessingError(
-                message="Failed to download file", job_id=job_id, error=str(e)
-            )
-
-        # Send progress update
-        current_task.update_state(state="PROGRESS", meta={"progress": 30})
-        send_redis_update(
-            {
-                "job_id": job_id,
-                "status": "processing",
-                "progress": 30,
-                "message": "File downloaded, starting transcription",
-                "type": "job_update",
-            },
-        )
-
-        # Process with Whisper
-        logger.info(f"Processing audio file: {filename} with model: {mode}")
-        try:
-            model = get_whisper_model(mode)
-            result = model.transcribe(str(file_path))
-        except Exception as e:
-            raise TranscriptionError(
-                message="Failed to transcribe audio", job_id=job_id, error=str(e)
-            )
-
-        # Send progress update
-        current_task.update_state(state="PROGRESS", meta={"progress": 90})
-        send_redis_update(
-            {
-                "job_id": job_id,
-                "status": "processing",
-                "progress": 90,
-                "message": "Transcription complete, saving results",
-                "type": "job_update",
-            },
-        )
-
-        # Calculate processing time
-        processing_time = (datetime.now() - start_time).total_seconds()
-
-        # Update job with results
-        # job.update(
-        #     status=JobStatus.COMPLETED,
-        #     result_text=result["text"],
-        #     processing_time_seconds=int(processing_time),
-        # )
-
-        # Send completion update
-        send_redis_update(
-            {
-                "job_id": job_id,
-                "status": "completed",
-                "progress": 100,
-                "result": result["text"],
-                "processing_time": processing_time,
-                "message": "Transcription completed successfully",
-                "type": "job_update",
-            },
-        )
-
-        # Clean up S3 file (optional - configurable)
-        try:
-            storage.delete_file(filename)
-            logger.info(f"Cleaned up S3 file: {filename}")
-        except StorageError as e:
-            logger.warning(f"Failed to clean up S3 file {filename}: {e}")
+        _initialize_job_processing(job_id)
+        file_path = _download_audio_file(job_id, filename)
+        transcription_result = _transcribe_audio_file(job_id, filename, mode, file_path)
+        processing_time = _finalize_job_success(job_id, transcription_result, start_time)
+        _cleanup_resources(filename, file_path)
 
         logger.info(f"Successfully processed job {job_id} in {processing_time:.2f}s")
-        return {"text": result["text"], "processing_time": processing_time}
+        return {"text": transcription_result["text"], "processing_time": processing_time}
 
     except (FileProcessingError, TranscriptionError, StorageError) as e:
-        logger.error(f"Processing error for job {job_id}: {str(e)}")
-
-        try:
-            job = TranscriptionJob.get(id=job_id)
-            job.update(status=JobStatus.FAILED, error_message=str(e))
-
-            # Send error update via WebSocket
-            send_redis_update(
-                {
-                    "job_id": job_id,
-                    "status": "failed",
-                    "error": str(e),
-                    "message": "Transcription failed",
-                    "type": "job_update",
-                },
-            )
-        except Exception as update_error:
-            logger.error(f"Failed to update job status: {update_error}")
-
-        current_task.update_state(state="FAILURE", meta={"error": str(e)})
+        _handle_known_error(job_id, e)
         raise
-
     except Exception as e:
-        logger.error(f"Unexpected error processing job {job_id}: {str(e)}")
-
-        try:
-            job = TranscriptionJob.get(id=job_id)
-            job.update(status=JobStatus.FAILED, error_message=f"Unexpected error: {str(e)}")
-
-            send_redis_update(
-                {
-                    "job_id": job_id,
-                    "status": "failed",
-                    "error": f"Unexpected error: {str(e)}",
-                    "message": "Transcription failed due to unexpected error",
-                    "type": "job_update",
-                },
-            )
-        except Exception as update_error:
-            logger.error(f"Failed to update job status: {update_error}")
-
-        current_task.update_state(state="FAILURE", meta={"error": str(e)})
-        raise FileProcessingError(
-            message="Unexpected error during processing", job_id=job_id, error=str(e)
-        )
-
+        _handle_unexpected_error(job_id, e)
+        raise
     finally:
-        # Clean up temp file if it exists
-        if file_path and file_path.exists():
-            try:
-                file_path.unlink()
-                logger.info(f"Cleaned up temporary file: {file_path}")
-            except Exception as e:
-                logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
+        _cleanup_temp_file(file_path)
+
+
+def _initialize_job_processing(job_id: str):  # -> TranscriptionJob:
+    """Initialize job processing and send initial progress update."""
+    # job = TranscriptionJob.get(id=job_id)
+    # job.update(status=JobStatus.PROCESSING)
+
+    send_redis_update({
+        "job_id": job_id,
+        "status": "processing",
+        "progress": 10,
+        "message": "Starting transcription",
+        "type": "job_update",
+    })
+
+    # return job
+
+
+def _download_audio_file(job_id: str, filename: str) -> Path:
+    """Download audio file from S3 storage."""
+    current_task.update_state(state="PROGRESS", meta={"progress": 20})
+    send_redis_update({
+        "job_id": job_id,
+        "status": "processing",
+        "progress": 20,
+        "message": "Downloading file",
+        "type": "job_update",
+    })
+
+    file_path = TMP_FOLDER.joinpath(filename)
+
+    try:
+        storage.download_file(filename, file_path)
+    except StorageError as e:
+        raise FileProcessingError(message="Failed to download file", job_id=job_id, error=str(e))
+
+    return file_path
+
+
+def _transcribe_audio_file(job_id: str, filename: str, mode: str, file_path: Path) -> dict:
+    """Transcribe audio file using Whisper model."""
+    current_task.update_state(state="PROGRESS", meta={"progress": 30})
+    send_redis_update({
+        "job_id": job_id,
+        "status": "processing",
+        "progress": 30,
+        "message": "File downloaded, starting transcription",
+        "type": "job_update",
+    })
+
+    logger.info(f"Processing audio file: {filename} with model: {mode}")
+
+    try:
+        model = get_whisper_model(mode)
+        result = model.transcribe(str(file_path))
+    except Exception as e:
+        raise TranscriptionError(message="Failed to transcribe audio", job_id=job_id, error=str(e))
+
+    return result
+
+
+def _finalize_job_success(job_id: str, result: dict, start_time: datetime) -> float:
+    """Finalize successful job processing and send completion updates."""
+    current_task.update_state(state="PROGRESS", meta={"progress": 90})
+    send_redis_update({
+        "job_id": job_id,
+        "status": "processing",
+        "progress": 90,
+        "message": "Transcription complete, saving results",
+        "type": "job_update",
+    })
+
+    # Calculate processing time
+    processing_time = (datetime.now() - start_time).total_seconds()
+
+    # Update job with results
+    # job.update(
+    #     status=JobStatus.COMPLETED,
+    #     result_text=result["text"],
+    #     processing_time_seconds=int(processing_time),
+    # )
+
+    # Send completion update
+    send_redis_update({
+        "job_id": job_id,
+        "status": "completed",
+        "progress": 100,
+        "result": result["text"],
+        "processing_time": processing_time,
+        "message": "Transcription completed successfully",
+        "type": "job_update",
+    })
+
+    return processing_time
+
+
+def _cleanup_resources(filename: str, file_path: Path):
+    """Clean up S3 file and other resources."""
+    try:
+        storage.delete_file(filename)
+        logger.info(f"Cleaned up S3 file: {filename}")
+    except StorageError as e:
+        logger.warning(f"Failed to clean up S3 file {filename}: {e}")
+
+
+def _handle_known_error(job_id: str, error: Exception):
+    """Handle known processing errors and update job status."""
+    logger.error(f"Processing error for job {job_id}: {str(error)}")
+
+    try:
+        job = TranscriptionJob.get(id=job_id)
+        job.update(status=JobStatus.FAILED, error_message=str(error))
+
+        send_redis_update({
+            "job_id": job_id,
+            "status": "failed",
+            "error": str(error),
+            "message": "Transcription failed",
+            "type": "job_update",
+        })
+    except Exception as update_error:
+        logger.error(f"Failed to update job status: {update_error}")
+
+    current_task.update_state(state="FAILURE", meta={"error": str(error)})
+
+
+def _handle_unexpected_error(job_id: str, error: Exception):
+    """Handle unexpected errors during processing."""
+    logger.error(f"Unexpected error processing job {job_id}: {str(error)}")
+    error_message = f"Unexpected error: {str(error)}"
+
+    try:
+        job = TranscriptionJob.get(id=job_id)
+        job.update(status=JobStatus.FAILED, error_message=error_message)
+
+        send_redis_update({
+            "job_id": job_id,
+            "status": "failed",
+            "error": error_message,
+            "message": "Transcription failed due to unexpected error",
+            "type": "job_update",
+        })
+    except Exception as update_error:
+        logger.error(f"Failed to update job status: {update_error}")
+
+    current_task.update_state(state="FAILURE", meta={"error": str(error)})
+    raise FileProcessingError(
+        message="Unexpected error during processing", job_id=job_id, error=str(error)
+    )
+
+
+def _cleanup_temp_file(file_path: Path):
+    """Clean up temporary file if it exists."""
+    if file_path and file_path.exists():
+        try:
+            file_path.unlink()
+            logger.info(f"Cleaned up temporary file: {file_path}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up temporary file {file_path}: {e}")
