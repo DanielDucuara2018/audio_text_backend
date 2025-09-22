@@ -6,25 +6,28 @@ A scalable FastAPI backend service for converting audio files to text using Open
 
 ```mermaid
 graph TB
-    Client[Client Application] --> API[FastAPI API Server<br/>:3203]
-    API --> DB[(PostgreSQL Database<br/>:5432)]
-    API --> Redis[(Redis Cache/Queue<br/>:6379)]
-    API --> S3[AWS S3 Storage<br/>eu-west-3]
+   Client[Client Application] -- "1. Request presigned url" --> API[FastAPI API Server<br/>:3203]
+   Client -- "2. Upload file" --> S3[AWS S3 Storage<br/>eu-west-3]
 
-    Redis --> Worker[Celery Worker<br/>audio_processing queue]
-    Worker --> S3
-    Worker --> DB
-    Worker --> Whisper[OpenAI Whisper Model]
+   Client -- "3.1 Request Transcription" --> API
+   API -- "3.2 Add job entry" --> DB[(PostgreSQL Database<br/>:5432)]
+   API -- "3.3 Job queued for celery" --> Redis[(Redis Cache/Queue<br/>:6379)]
 
-    API --> WS[WebSocket Connections]
-    Redis --> WS
+   Redis -- "4.1 Gives the job to worker" --> Worker[Celery Worker<br/>audio_processing queue]
+   Worker -- "4.2 Download file" --> S3
+   Worker -- "4.2 Run transcription" --> Whisper[OpenAI Whisper Model]
+   Worker -- "4.3 Publish update messages to job_updates channel" --> Redis
 
-    subgraph "Docker Network: 169.254.9.0/24"
-        API_CONTAINER[app: 169.254.9.2]
-        DB_CONTAINER[postgres: 169.254.9.3]
-        REDIS_CONTAINER[redis: 169.254.9.4]
-        WORKER_CONTAINER[celery-worker: 169.254.9.5]
-    end
+   Client -- "5.1 Connect to WS" --> API
+   API -- "5.2 Subscribe to job_updates pubsub channel" --> Redis
+   API -- "5.3 Send updates" --> Client
+
+   subgraph "Docker Network: 169.254.9.0/24"
+      API_CONTAINER[app: 169.254.9.2]
+      DB_CONTAINER[postgres: 169.254.9.3]
+      REDIS_CONTAINER[redis: 169.254.9.4]
+      WORKER_CONTAINER[celery-worker: 169.254.9.5]
+   end
 ```
 
 ### Component Interaction Flow
