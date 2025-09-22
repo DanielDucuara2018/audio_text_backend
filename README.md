@@ -15,8 +15,8 @@ graph TB
 
    Redis -- "4.1 Gives the job to worker" --> Worker[Celery Worker<br/>audio_processing queue]
    Worker -- "4.2 Download file" --> S3
-   Worker -- "4.2 Run transcription" --> Whisper[OpenAI Whisper Model]
-   Worker -- "4.3 Publish update messages to job_updates channel" --> Redis
+   Worker -- "4.3 Run transcription" --> Whisper[OpenAI Whisper Model]
+   Worker -- "4.4 Publish update messages to job_updates channel" --> Redis
 
    Client -- "5.1 Connect to WS" --> API
    API -- "5.2 Subscribe to job_updates pubsub channel" --> Redis
