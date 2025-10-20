@@ -42,13 +42,15 @@ graph TB
 
 ## Features
 
-- **Async Processing**: Non-blocking audio processing using Celery
+- **Async Processing**: Non-blocking audio processing using Celery with advanced configuration
 - **S3 Storage**: Scalable file storage with S3-compatible services
-- **Real-time Updates**: WebSocket support for live progress updates
+- **Real-time Updates**: WebSocket support for live progress updates with singleton pattern
 - **Job Management**: Track processing status and history
 - **Multiple Formats**: Support for MP3, WAV, M4A, FLAC, OGG, AAC
 - **Microservices Architecture**: Containerized services with Docker
 - **Database Migrations**: Alembic for schema management
+- **Resource Management**: Context managers with reference counting for safe cleanup
+- **Configuration Management**: Type-safe dataclass-based configuration system
 
 ## Project Structure
 
@@ -83,10 +85,10 @@ audio_text_backend/
     │   ├── audio.py                   # Audio-related schemas
     │   └── job.py                     # Job-related schemas
     ├── action/                        # Business logic layer
-    │   ├── __init__.py
-    │   ├── audio.py                   # Audio file handling & S3 operations
-    │   ├── job.py                     # Job management & WebSocket
-    │   └── tasks.py                   # Celery task definitions
+            ├── __init__.py
+            ├── audio.py                   # Audio file handling & S3 operations
+            ├── job.py                     # Job management & Redis pub/sub (singleton pattern)
+            └── tasks.py                   # Celery task definitions
     ├── celery/                        # Celery configuration
     │   └── app.py                     # Celery application setup
     └── api/                           # FastAPI routers
@@ -94,7 +96,7 @@ audio_text_backend/
         ├── api.py                     # Main FastAPI application
         └── routers/
             ├── audio.py               # Audio upload endpoints
-            └── job.py                 # Job status endpoints
+            └── job.py                 # Job status & WebSocket lifecycle management
 ```
 
 ## Configuration
@@ -126,10 +128,31 @@ region = eu-west-3               # AWS region
 ### Celery/Redis Configuration
 
 ```ini
+[redis]
+host = redis                          # Redis hostname (Docker service)
+port = 6379                          # Redis port
+pub_sub_channel = job_updates        # Redis pub/sub channel for WebSocket updates
+
 [celery]
-redis_url = redis://redis:6379/0
-celery_broker_url = redis://redis:6379/0
-celery_result_backend = redis://redis:6379/0
+queue_name = audio_processing        # Celery queue name
+routing_key = audio_processing       # Task routing key
+serialization_format = json          # Task serialization format
+timezone = UTC                       # Timezone for task scheduling
+enable_utc = 1                      # Enable UTC timestamps
+task_track_started = 1              # Track task start events
+task_acks_late = 1                  # Acknowledge tasks after completion
+worker_prefetch_multiplier = 1      # Tasks prefetched per worker process
+worker_disable_rate_limits = 1      # Disable rate limiting
+worker_max_tasks_per_child = 10     # Max tasks per worker before restart
+task_time_limit = 1800              # Hard task time limit (30 min)
+task_soft_time_limit = 1500         # Soft task time limit (25 min)
+task_default_retry_delay = 60       # Default retry delay (seconds)
+task_max_retries = 3                # Maximum retry attempts
+worker_autoscaler = celery.worker.autoscale:Autoscaler
+retry_policy_max_retries = 3        # Retry policy max attempts
+retry_policy_interval_start = 0     # Retry policy start interval
+retry_policy_interval_step = 60     # Retry policy step interval
+retry_policy_interval_max = 300     # Retry policy max interval
 ```
 
 ### File Processing Configuration
@@ -246,21 +269,47 @@ curl "http://localhost:3203/api/v1/job/read"
 curl "http://localhost:3203/api/v1"
 ```
 
+### WebSocket Architecture
+
+The WebSocket implementation follows a clean separation of concerns:
+
+#### FastAPI Router Layer (`api/routers/job.py`)
+
+- Manages WebSocket connection lifecycle (accept, close, error handling)
+- Handles transport layer concerns
+- Automatic connection cleanup on disconnect/error
+
+#### Action Layer (`action/job.py`)
+
+- **JobUpdateManager**: Singleton pattern with async context manager
+- Handles Redis pub/sub subscription and message routing
+- Connection tracking with reference counting for multi-context safety
+- Business logic separation from transport concerns
+
+#### Connection Flow
+
+1. FastAPI accepts WebSocket connection
+2. Action layer manages Redis pub/sub and connection tracking
+3. Real-time updates flow: Celery → Redis pub/sub → WebSocket clients
+4. On disconnect: FastAPI closes connection, action layer cleans tracking
+
 ## Architecture Components
 
 ### 1. FastAPI Application (`api/api.py`)
 
-- **Purpose**: REST API server and WebSocket handler
+- **Purpose**: REST API server and WebSocket lifecycle management
 - **Port**: 3203
 - **Features**: CORS middleware, automatic OpenAPI documentation
+- **WebSocket Responsibilities**: Connection accept/close, error handling, lifecycle management
 - **Dependencies**: PostgreSQL, Redis
 
 ### 2. Celery Worker (`action/tasks.py`)
 
-- **Purpose**: Asynchronous audio processing
-- **Queue**: `audio_processing`
+- **Purpose**: Asynchronous audio processing with comprehensive configuration
+- **Queue**: `audio_processing` with advanced routing and retry policies
 - **Tasks**: Download from S3, Whisper transcription, cleanup
 - **Models**: Supports all Whisper models (tiny to large)
+- **Configuration**: Auto-scaling, time limits, retry mechanisms, task tracking
 
 ### 3. PostgreSQL Database
 
@@ -275,9 +324,9 @@ curl "http://localhost:3203/api/v1"
 - **Purpose**: Celery broker, result backend, pub/sub for WebSocket
 - **Port**: 6379
 - **Usage**:
-  - Queue: `audio_processing`
-  - Pub/Sub: `job_updates` channel
-  - Results: Celery task results
+  - Queue: `audio_processing` with custom routing
+  - Pub/Sub: `job_updates` channel for real-time updates
+  - Results: Celery task results with configurable backend
 
 ### 5. AWS S3 Storage
 
@@ -285,11 +334,24 @@ curl "http://localhost:3203/api/v1"
 - **Features**: Automatic bucket creation, file cleanup
 - **Security**: Temporary URLs for secure uploads
 
+### 6. Configuration Management (`config.py`)
+
+- **Purpose**: Centralized configuration using dataclasses
+- **Features**:
+  - Type-safe configuration loading
+  - Environment-specific settings
+  - Comprehensive Celery configuration
+  - Database, Redis, AWS, and file handling settings
+
 ### 6. WebSocket Manager (`action/job.py`)
 
-- **Purpose**: Real-time progress updates
-- **Transport**: Redis pub/sub
-- **Features**: Connection management, automatic cleanup
+- **Purpose**: Real-time progress updates via Redis pub/sub
+- **Architecture**: Singleton pattern with async context manager
+- **Features**:
+  - Reference counting for multi-context safety
+  - Automatic Redis resource cleanup
+  - Connection tracking and lifecycle management
+  - Separation of concerns: FastAPI handles WebSocket lifecycle, manager handles business logic
 
 ## Database Schema
 
@@ -340,9 +402,26 @@ celery -A audio_text_backend.celery.app inspect active
 # View registered tasks
 celery -A audio_text_backend.celery.app inspect registered
 
+# View worker configuration
+celery -A audio_text_backend.celery.app inspect conf
+
+# View queue information
+celery -A audio_text_backend.celery.app inspect active_queues
+
 # Flower monitoring (if enabled)
 # Visit http://localhost:5555
 ```
+
+### Enhanced Celery Features
+
+The Celery configuration includes advanced features:
+
+- **Auto-scaling**: Dynamic worker scaling based on queue size
+- **Task Time Limits**: Soft (25min) and hard (30min) limits prevent runaway tasks
+- **Retry Policies**: Exponential backoff with configurable intervals
+- **Prefetch Control**: Single task prefetch prevents memory issues
+- **Task Routing**: Dedicated `audio_processing` queue with custom routing
+- **Reliability**: Late acknowledgment and worker recycling prevent task loss
 
 ## Development
 
@@ -418,11 +497,31 @@ The application is designed for container orchestration with:
    # Check worker logs
    docker-compose logs celery-worker
 
+   # Inspect worker configuration
+   celery -A audio_text_backend.celery.app inspect conf
+
+   # Check queue status
+   celery -A audio_text_backend.celery.app inspect active_queues
+
    # Restart worker
    docker-compose restart celery-worker
    ```
 
-4. **S3 Permission Errors**
+4. **WebSocket Connection Issues**
+
+   ```bash
+   # Check Redis pub/sub channel
+   docker-compose exec redis redis-cli
+   > PSUBSCRIBE job_updates
+
+   # Check WebSocket connection tracking
+   docker-compose logs app | grep "WebSocket"
+
+   # Verify Redis connectivity
+   docker-compose exec redis redis-cli ping
+   ```
+
+5. **S3 Permission Errors**
    - Verify AWS credentials in config.ini
    - Check bucket permissions and region
 
