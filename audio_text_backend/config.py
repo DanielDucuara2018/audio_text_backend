@@ -25,10 +25,46 @@ class Database:
 
 
 @dataclass
+class Redis:
+    host: str
+    port: str
+    pub_sub_channel: str
+
+
+@dataclass
 class Celery:
-    redis_url: str
-    celery_broker_url: str
-    celery_result_backend: str
+    # Queue configuration
+    queue_name: str
+    routing_key: str
+
+    # Serialization settings
+    serialization_format: str = "json"
+    timezone: str = "UTC"
+    enable_utc: str = "1"
+    task_track_started: str = "1"
+
+    # Worker configuration
+    task_acks_late: str = "1"
+    worker_prefetch_multiplier: str = "1"
+    worker_disable_rate_limits: str = "1"
+    worker_max_tasks_per_child: str = "10"
+
+    # Task time limits (in seconds)
+    task_time_limit: str = "1800"  # 30 minutes
+    task_soft_time_limit: str = "1500"  # 25 minutes
+
+    # Retry settings
+    task_default_retry_delay: str = "60"  # 1 minute
+    task_max_retries: str = "3"
+
+    # Auto-scaling
+    worker_autoscaler: str = "celery.worker.autoscale:Autoscaler"
+
+    # Retry policy settings
+    retry_policy_max_retries: str = "3"
+    retry_policy_interval_start: str = "0"
+    retry_policy_interval_step: str = "60"
+    retry_policy_interval_max: str = "300"
 
 
 @dataclass
@@ -43,13 +79,13 @@ class AWS:
 class File:
     max_size_mb: str
     allowed_audio_extensions: str
-    whisper_model: str
 
 
 @load_configuration
 @dataclass
 class Config:
     database: Database
+    redis: Redis
     celery: Celery
     aws: AWS
     file: File

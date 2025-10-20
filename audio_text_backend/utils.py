@@ -8,8 +8,6 @@ _config_fields: dict[Type, Optional[Any]] = {}
 
 Cls = TypeVar("Cls", bound=Type)
 
-TOKEN_KEY_NAME = "access_token"
-
 
 class ConfigurationField:
     def __init__(self, name: str):

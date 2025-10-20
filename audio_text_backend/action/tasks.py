@@ -11,12 +11,11 @@ from audio_text_backend.action.audio import storage
 from audio_text_backend.celery.app import celery_app as app
 from audio_text_backend.config import Config
 from audio_text_backend.errors import FileProcessingError, StorageError, TranscriptionError
-from audio_text_backend.model import JobStatus, TranscriptionJob
 
 logger = logging.getLogger(__name__)
 
 # Add Redis client for publishing
-redis_client = redis.Redis.from_url(Config.celery.redis_url)
+redis_client = redis.Redis.from_url(f"redis://{Config.redis.host}:{Config.redis.port}/0")
 
 BASE_DIR = Path(__file__).parent
 TMP_FOLDER = BASE_DIR.joinpath("tmp")
@@ -45,7 +44,7 @@ def get_whisper_model(model_name: str) -> whisper.Whisper:
 def send_redis_update(message: dict) -> None:
     """Send WebSocket update via Redis pub/sub."""
     try:
-        redis_client.publish("job_updates", json.dumps(message))
+        redis_client.publish(Config.redis.pub_sub_channel, json.dumps(message))
     except Exception as e:
         logger.warning(f"Failed to send Redis update for job {message['job_id']}: {e}")
 
@@ -66,7 +65,6 @@ def process_audio(job_id: str, filename: str, mode: str):
 
         logger.info(f"Successfully processed job {job_id} in {processing_time:.2f}s")
         return {"text": transcription_result["text"], "processing_time": processing_time}
-
     except (FileProcessingError, TranscriptionError, StorageError) as e:
         _handle_known_error(job_id, e)
         raise
@@ -77,11 +75,8 @@ def process_audio(job_id: str, filename: str, mode: str):
         _cleanup_temp_file(file_path)
 
 
-def _initialize_job_processing(job_id: str):  # -> TranscriptionJob:
+def _initialize_job_processing(job_id: str) -> None:
     """Initialize job processing and send initial progress update."""
-    # job = TranscriptionJob.get(id=job_id)
-    # job.update(status=JobStatus.PROCESSING)
-
     send_redis_update({
         "job_id": job_id,
         "status": "processing",
@@ -89,8 +84,6 @@ def _initialize_job_processing(job_id: str):  # -> TranscriptionJob:
         "message": "Starting transcription",
         "type": "job_update",
     })
-
-    # return job
 
 
 def _download_audio_file(job_id: str, filename: str) -> Path:
@@ -150,13 +143,7 @@ def _finalize_job_success(job_id: str, result: dict, start_time: datetime) -> fl
     # Calculate processing time
     processing_time = (datetime.now() - start_time).total_seconds()
 
-    # Update job with results
-    # job.update(
-    #     status=JobStatus.COMPLETED,
-    #     result_text=result["text"],
-    #     processing_time_seconds=int(processing_time),
-    # )
-
+    current_task.update_state(state="COMPLETED", meta={"progress": 100})
     # Send completion update
     send_redis_update({
         "job_id": job_id,
@@ -185,9 +172,6 @@ def _handle_known_error(job_id: str, error: Exception):
     logger.error(f"Processing error for job {job_id}: {str(error)}")
 
     try:
-        job = TranscriptionJob.get(id=job_id)
-        job.update(status=JobStatus.FAILED, error_message=str(error))
-
         send_redis_update({
             "job_id": job_id,
             "status": "failed",
@@ -207,9 +191,6 @@ def _handle_unexpected_error(job_id: str, error: Exception):
     error_message = f"Unexpected error: {str(error)}"
 
     try:
-        job = TranscriptionJob.get(id=job_id)
-        job.update(status=JobStatus.FAILED, error_message=error_message)
-
         send_redis_update({
             "job_id": job_id,
             "status": "failed",
