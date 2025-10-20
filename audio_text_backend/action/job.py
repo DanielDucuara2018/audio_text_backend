@@ -188,7 +188,7 @@ class JobUpdateManager:
             logger.info(f"Sent WebSocket update for job {job_id}: {data.get('message', '')}")
         except Exception as ws_error:
             logger.warning(f"WebSocket send failed for job {job_id}: {ws_error}")
-            self.disconnect(websocket, job_id)
+            await self.disconnect(websocket, job_id)
 
     def _update_db_job_status(self, job_id: str, data: dict[str, Any]):
         """Update the job status in the database."""
@@ -205,11 +205,16 @@ class JobUpdateManager:
         except Exception as e:
             logger.error(f"Failed to update job {job_id} status to {job.status}: {e}")
 
-    def disconnect(self, websocket: WebSocket, job_id: str):
+    async def disconnect(self, websocket: WebSocket, job_id: str):
         """Disconnect and remove a WebSocket connection."""
+        # First remove from tracking to prevent further message attempts
         self._remove_connection(websocket, job_id)
+
+        # Then close the actual WebSocket connection
+        await self._close_websocket_safely(websocket)
+
         logger.debug(
-            f"Removed WebSocket connection for job {job_id}. Remaining connections: {len(self.active_connections)}"
+            f"Disconnected and closed WebSocket for job {job_id}. Remaining connections: {len(self.active_connections)}"
         )
 
     def _remove_connection(self, websocket: WebSocket, job_id: str, *, delete_job: bool = True):
@@ -228,7 +233,7 @@ class JobUpdateManager:
 
         # Create tasks for parallel closing
         close_tasks = [
-            self._close_websocket_safely(websocket)
+            self._close_websocket_safely(websocket, code=1001, reason="Server shutting down")
             for websocket in self.active_connections.copy()
             if hasattr(websocket, "client_state") and websocket.client_state.value != 3
         ]
@@ -240,10 +245,19 @@ class JobUpdateManager:
         self.active_connections.clear()
         self.job_connections.clear()
 
-    async def _close_websocket_safely(self, websocket: WebSocket) -> None:
+    async def _close_websocket_safely(
+        self, websocket: WebSocket, *, code: int = 1001, reason: str = "Connection closed"
+    ) -> None:
         """Safely close a single WebSocket connection."""
         try:
-            await websocket.close(code=1001, reason="Server shutting down")
+            # Check if WebSocket is still open before closing
+            if (
+                hasattr(websocket, "client_state") and websocket.client_state.value != 3
+            ):  # 3 = CLOSED
+                await websocket.close(code=code, reason=reason)
+                logger.debug(f"WebSocket closed with code {code}: {reason}")
+            else:
+                logger.debug("WebSocket already closed, skipping close operation")
         except Exception as e:
             logger.warning(f"Error closing WebSocket: {e}")
 
@@ -292,7 +306,7 @@ async def establish_connection(job_id: str, websocket: WebSocket):
             logger.error(f"WebSocket error for job {job_id}: {e}")
             await _handle_websocket_error(websocket, job_id, e)
         finally:
-            manager.disconnect(websocket, job_id)
+            await manager.disconnect(websocket, job_id)
             logger.info(f"WebSocket connection cleanup completed for job: {job_id}")
 
 
@@ -324,7 +338,7 @@ async def _handle_websocket_lifecycle(
             await _send_keepalive_ping(websocket)
         except WebSocketDisconnect:
             logger.info(f"Client disconnected for job: {job_id}")
-            manager.disconnect(websocket, job_id)  # Explicit disconnect
+            await manager.disconnect(websocket, job_id)  # Explicit disconnect
             break
         except Exception as e:
             logger.error(f"Error processing client message for job {job_id}: {e}")
