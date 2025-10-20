@@ -103,7 +103,7 @@ class JobUpdateManager:
         if job_id in self.job_connections:
             logger.warning(f"Replacing existing connection for job {job_id}")
             old_websocket = self.job_connections[job_id]
-            self._remove_connection(old_websocket, job_id, delete_job=False)
+            self.remove_connection(old_websocket, job_id, delete_job=False)
 
         self.active_connections.append(websocket)
         self.job_connections[job_id] = websocket
@@ -188,7 +188,8 @@ class JobUpdateManager:
             logger.info(f"Sent WebSocket update for job {job_id}: {data.get('message', '')}")
         except Exception as ws_error:
             logger.warning(f"WebSocket send failed for job {job_id}: {ws_error}")
-            await self.disconnect(websocket, job_id)
+            # Only remove from tracking - let FastAPI handle the connection closure
+            self.remove_connection(websocket, job_id)
 
     def _update_db_job_status(self, job_id: str, data: dict[str, Any]):
         """Update the job status in the database."""
@@ -206,18 +207,17 @@ class JobUpdateManager:
             logger.error(f"Failed to update job {job_id} status to {job.status}: {e}")
 
     async def disconnect(self, websocket: WebSocket, job_id: str):
-        """Disconnect and remove a WebSocket connection."""
-        # First remove from tracking to prevent further message attempts
-        self._remove_connection(websocket, job_id)
+        """Disconnect and remove a WebSocket connection from tracking.
 
-        # Then close the actual WebSocket connection
-        await self._close_websocket_safely(websocket)
-
+        Note: WebSocket closure is handled by the FastAPI router layer.
+        This method only removes the connection from internal tracking.
+        """
+        self.remove_connection(websocket, job_id)
         logger.debug(
-            f"Disconnected and closed WebSocket for job {job_id}. Remaining connections: {len(self.active_connections)}"
+            f"Removed WebSocket tracking for job {job_id}. Remaining connections: {len(self.active_connections)}"
         )
 
-    def _remove_connection(self, websocket: WebSocket, job_id: str, *, delete_job: bool = True):
+    def remove_connection(self, websocket: WebSocket, job_id: str, *, delete_job: bool = True):
         """Remove a WebSocket connection."""
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
@@ -225,41 +225,22 @@ class JobUpdateManager:
             del self.job_connections[job_id]
 
     async def _close_all_websockets(self):
-        """Close all active WebSocket connections gracefully."""
+        """Clear all WebSocket connection tracking during shutdown.
+
+        Note: This only clears internal tracking. Individual WebSocket connections
+        are managed by their respective FastAPI router contexts.
+        """
         if not self.active_connections:
             return
 
-        logger.info(f"Closing {len(self.active_connections)} active WebSocket connections")
+        logger.info(
+            f"Clearing tracking for {len(self.active_connections)} WebSocket connections during shutdown"
+        )
 
-        # Create tasks for parallel closing
-        close_tasks = [
-            self._close_websocket_safely(websocket, code=1001, reason="Server shutting down")
-            for websocket in self.active_connections.copy()
-            if hasattr(websocket, "client_state") and websocket.client_state.value != 3
-        ]
-        # Wait for all closures to complete
-        if close_tasks:
-            await asyncio.gather(*close_tasks, return_exceptions=True)
-
-        # Clear all connections
+        # Clear all connection tracking
         self.active_connections.clear()
         self.job_connections.clear()
-
-    async def _close_websocket_safely(
-        self, websocket: WebSocket, *, code: int = 1001, reason: str = "Connection closed"
-    ) -> None:
-        """Safely close a single WebSocket connection."""
-        try:
-            # Check if WebSocket is still open before closing
-            if (
-                hasattr(websocket, "client_state") and websocket.client_state.value != 3
-            ):  # 3 = CLOSED
-                await websocket.close(code=code, reason=reason)
-                logger.debug(f"WebSocket closed with code {code}: {reason}")
-            else:
-                logger.debug("WebSocket already closed, skipping close operation")
-        except Exception as e:
-            logger.warning(f"Error closing WebSocket: {e}")
+        logger.info("All WebSocket connection tracking cleared")
 
     async def stop_listening(self):
         """Stop the Redis listener."""
@@ -292,7 +273,11 @@ class JobUpdateManager:
 
 
 async def establish_connection(job_id: str, websocket: WebSocket):
-    """Establish WebSocket connection for job updates using context manager."""
+    """Establish WebSocket connection for job updates using context manager.
+
+    Note: WebSocket lifecycle (accept/close) is managed by FastAPI router.
+    This function handles business logic: Redis pub/sub and connection tracking.
+    """
     async with JobUpdateManager() as manager:
         try:
             await manager.connect(websocket, job_id)
@@ -306,8 +291,9 @@ async def establish_connection(job_id: str, websocket: WebSocket):
             logger.error(f"WebSocket error for job {job_id}: {e}")
             await _handle_websocket_error(websocket, job_id, e)
         finally:
-            await manager.disconnect(websocket, job_id)
-            logger.info(f"WebSocket connection cleanup completed for job: {job_id}")
+            # Only remove from tracking - FastAPI router handles connection closure
+            manager.remove_connection(websocket, job_id)
+            logger.info(f"WebSocket connection tracking cleanup completed for job: {job_id}")
 
 
 async def _send_connection_confirmation(websocket: WebSocket, job_id: str):
@@ -338,7 +324,8 @@ async def _handle_websocket_lifecycle(
             await _send_keepalive_ping(websocket)
         except WebSocketDisconnect:
             logger.info(f"Client disconnected for job: {job_id}")
-            await manager.disconnect(websocket, job_id)  # Explicit disconnect
+            # Only remove from tracking - FastAPI router handles connection closure
+            manager.remove_connection(websocket, job_id)
             break
         except Exception as e:
             logger.error(f"Error processing client message for job {job_id}: {e}")
