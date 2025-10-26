@@ -15,19 +15,19 @@ celery_app.conf.update(
     accept_content=[Config.celery.serialization_format],
     result_serializer=Config.celery.serialization_format,
     timezone=Config.celery.timezone,
-    enable_utc=bool(int(Config.celery.enable_utc)),
-    task_track_started=bool(int(Config.celery.task_track_started)),
+    enable_utc=Config.celery.enable_utc,
+    task_track_started=Config.celery.task_track_started,
     # Worker configuration - reliability and performance
-    task_acks_late=bool(int(Config.celery.task_acks_late)),
-    worker_prefetch_multiplier=int(Config.celery.worker_prefetch_multiplier),
-    worker_disable_rate_limits=bool(int(Config.celery.worker_disable_rate_limits)),
-    worker_max_tasks_per_child=int(Config.celery.worker_max_tasks_per_child),
+    task_acks_late=Config.celery.task_acks_late,
+    worker_prefetch_multiplier=Config.celery.worker_prefetch_multiplier,
+    worker_disable_rate_limits=Config.celery.worker_disable_rate_limits,
+    worker_max_tasks_per_child=Config.celery.worker_max_tasks_per_child,
     # Task time limits for better resource management
-    task_time_limit=int(Config.celery.task_time_limit),
-    task_soft_time_limit=int(Config.celery.task_soft_time_limit),
+    task_time_limit=Config.celery.task_time_limit,
+    task_soft_time_limit=Config.celery.task_soft_time_limit,
     # Enhanced retry and reliability settings
-    task_default_retry_delay=int(Config.celery.task_default_retry_delay),
-    task_max_retries=int(Config.celery.task_max_retries),
+    task_default_retry_delay=Config.celery.task_default_retry_delay,
+    task_max_retries=Config.celery.task_max_retries,
     # Auto-scaling configuration
     worker_autoscaler=Config.celery.worker_autoscaler,
     # Task routing for different queues
@@ -37,10 +37,10 @@ celery_app.conf.update(
             "routing_key": Config.celery.routing_key,
             "retry": True,
             "retry_policy": {
-                "max_retries": int(Config.celery.retry_policy_max_retries),
-                "interval_start": int(Config.celery.retry_policy_interval_start),
-                "interval_step": int(Config.celery.retry_policy_interval_step),
-                "interval_max": int(Config.celery.retry_policy_interval_max),
+                "max_retries": Config.celery.retry_policy_max_retries,
+                "interval_start": Config.celery.retry_policy_interval_start,
+                "interval_step": Config.celery.retry_policy_interval_step,
+                "interval_max": Config.celery.retry_policy_interval_max,
             },
         }
     },

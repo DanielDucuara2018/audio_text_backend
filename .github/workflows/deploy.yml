@@ -1,0 +1,61 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main, production]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        type: choice
+        options: [staging, production]
+        default: staging
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: europe-west4
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Determine environment
+        id: env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENVIRONMENT="${{ github.event.inputs.environment }}"
+          elif [[ "${{ github.ref }}" == "refs/heads/production" ]]; then
+            ENVIRONMENT="production"
+          else
+            ENVIRONMENT="staging"
+          fi
+
+          echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Deploy with Cloud Build
+        run: |
+          gcloud builds submit \
+            --config=ci/deployment.yaml \
+            --substitutions=_REGION="${{ env.REGION }}" \
+            .
+
+      - name: Deployment summary
+        run: |
+          echo "🚀 Deployed to: ${{ steps.env.outputs.environment }}"
+          echo "🌍 Region: ${{ env.REGION }}"
+          echo "📦 Services:"
+          echo "  - API: gcr.io/${{ env.GCP_PROJECT_ID }}/audio-api:latest"
+          echo "  - Worker: gcr.io/${{ env.GCP_PROJECT_ID }}/audio-worker:latest"

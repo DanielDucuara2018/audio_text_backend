@@ -1,12 +1,17 @@
+import os
 import secrets
 from dataclasses import fields
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, Optional, Type, TypeVar, cast
 
 from apischema import deserialize
 
 _config_fields: dict[Type, Optional[Any]] = {}
 
 Cls = TypeVar("Cls", bound=Type)
+
+T = TypeVar("T")
+
+BOOL_VALUES = {"1", "true", "yes", "on", "True", "Yes", "On"}
 
 
 class ConfigurationField:
@@ -30,9 +35,30 @@ def load_configuration(cls: Cls) -> Cls:
     return cls
 
 
+def coerce(cls: type[T], data) -> T:
+    """Only coerce int to bool."""
+    if isinstance(data, dict):
+        return data
+
+    if "env" in data.lower():
+        if data in os.environ:
+            data = os.environ[data]
+        else:
+            raise RuntimeError(f"Environment variable {data} not set")
+
+    if cls in {int, str, float}:
+        data = cast(T, cls(data))
+    elif cls is list:
+        data = cast(T, cls(data.split(",")))
+    elif cls is bool:
+        data = cast(T, cls(data in BOOL_VALUES))
+
+    return data
+
+
 def load_configuration_data(config: dict[str, Any]) -> None:
     for key, _ in _config_fields.items():
-        _config_fields[key] = deserialize(key, config)
+        _config_fields[key] = deserialize(key, config, coerce=coerce)
 
 
 def idun(prefix: str, nbytes: int = 16) -> str:

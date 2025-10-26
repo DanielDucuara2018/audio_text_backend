@@ -12,9 +12,8 @@ from alembic.command import upgrade
 from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-
-from .config import Config, Database, logging
-from .errors import DBError
+from audio_text_backend.config import Config, Database, logging
+from audio_text_backend.errors import DBError
 
 ROOT = Path(__file__).parents[1]
 ALEMBIC_PATH = ROOT.joinpath("alembic")
@@ -116,7 +115,7 @@ def initialize(update_schema: bool = False) -> None:
     logger.info("Checking alembic migrations")
     engine = get_engine(Config.database, suffix="?target_session_attrs=read-write")
     with engine.connect() as conn:
-        exists = create(conn, Config.database.ref_table, bool(int(Config.database.force_recreate)))
+        exists = create(conn, Config.database.ref_table, Config.database.force_recreate)
         update(conn, exists=exists, dry_run=not update_schema)
 
         if get_missing_revisions(conn) and update_schema:

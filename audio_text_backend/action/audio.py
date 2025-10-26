@@ -19,7 +19,7 @@ def validate_audio_file(filename: str, content_type: str, file_size: int) -> Non
 
 def _validate_file_size(file_size: int) -> None:
     """Validate that file size is within allowed limits."""
-    max_size_mb = int(Config.file.max_size_mb)
+    max_size_mb = Config.file.max_size_mb
     max_size_bytes = max_size_mb * 1024 * 1024
 
     if file_size > max_size_bytes:
@@ -39,11 +39,11 @@ def _validate_content_type(content_type: str) -> None:
 def _validate_file_extension(filename: str) -> None:
     """Validate that the file extension is allowed."""
     extension = _extract_file_extension(filename)
-    allowed_extensions = _get_allowed_extensions()
+    allowed_extensions = Config.file.allowed_audio_extensions
 
     if extension not in allowed_extensions:
         raise FileValidationError(
-            message=f"Unsupported audio format. Allowed: {Config.file.allowed_audio_extensions}",
+            message=f"Unsupported audio format. Allowed: {allowed_extensions}",
             extension=extension,
             allowed_extensions=allowed_extensions,
         )
@@ -52,11 +52,6 @@ def _validate_file_extension(filename: str) -> None:
 def _extract_file_extension(filename: str) -> str:
     """Extract and normalize file extension from filename."""
     return filename.split(".")[-1].lower()
-
-
-def _get_allowed_extensions() -> list[str]:
-    """Get list of allowed audio file extensions."""
-    return Config.file.allowed_audio_extensions.split(",")
 
 
 class S3Storage:

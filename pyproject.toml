@@ -20,11 +20,10 @@ classifiers = [
 ]
 
 dependencies = [
+  # Core API dependencies (needed by both API and Worker)
   "fastapi==0.116.2",
   "uvicorn[standard]==0.35.0",
   "apischema==0.19.0",
-  "openai-whisper==20231117",
-  "setuptools-rust==1.9.0",
   "python-magic==0.4.27",
   # Storage and async processing
   "boto3==1.34.0",
@@ -39,6 +38,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# ML/Worker dependencies (only for Celery workers doing audio processing)
+worker = ["openai-whisper==20231117", "setuptools-rust==1.9.0"]
 dev = ["ruff>=0.12.10", "pre-commit>=4.3.0", "setuptools==80.9.0"]
 test = [
   "pytest==6.2.4",

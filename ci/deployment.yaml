@@ -1,0 +1,121 @@
+steps:
+  # Build API container (lightweight, no ML libraries)
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-f",
+        "Dockerfile",
+        "--target",
+        "api",
+        "-t",
+        "gcr.io/$PROJECT_ID/audio-api:$COMMIT_SHA",
+        "-t",
+        "gcr.io/$PROJECT_ID/audio-api:latest",
+        ".",
+      ]
+
+  # Build Worker container (with Whisper and ML libraries)
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      [
+        "build",
+        "-f",
+        "Dockerfile",
+        "--target",
+        "worker",
+        "-t",
+        "gcr.io/$PROJECT_ID/audio-worker:$COMMIT_SHA",
+        "-t",
+        "gcr.io/$PROJECT_ID/audio-worker:latest",
+        ".",
+      ]
+
+  # Push API image
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "gcr.io/$PROJECT_ID/audio-api"]
+
+  # Push Worker image
+  - name: "gcr.io/cloud-builders/docker"
+    args: ["push", "--all-tags", "gcr.io/$PROJECT_ID/audio-worker"]
+
+  # Deploy API service
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "audio-api"
+      - "--image"
+      - "gcr.io/$PROJECT_ID/audio-api:$COMMIT_SHA"
+      - "--region"
+      - "${_REGION}"
+      - "--platform"
+      - "managed"
+      - "--memory"
+      - "1Gi"
+      - "--cpu"
+      - "1"
+      - "--min-instances"
+      - "0"
+      - "--max-instances"
+      - "10"
+      - "--allow-unauthenticated"
+      # Non-secret environment variables (using substitution variables)
+      - "--set-env-vars"
+      - "AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV=${_MAX_FILE_SIZE},AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${_ALLOWED_EXTENSIONS},AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV=${_RATE_LIMIT_MINUTE},AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV=${_RATE_LIMIT_HOUR},AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${_REDIS_CHANNEL},AUDIO_TEXT_CELERY_QUEUE_NAME_ENV=${_CELERY_QUEUE},AUDIO_TEXT_CELERY_ROUTING_KEY_ENV=${_CELERY_ROUTING_KEY},AUDIO_TEXT_DB_REF_TABLE_ENV=${_DB_REF_TABLE}"
+      # Secrets from Secret Manager (injected at runtime)
+      - "--update-secrets"
+      - "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+
+  # Deploy Worker service
+  - name: "gcr.io/cloud-builders/gcloud"
+    args:
+      - "run"
+      - "deploy"
+      - "audio-worker"
+      - "--image"
+      - "gcr.io/$PROJECT_ID/audio-worker:$COMMIT_SHA"
+      - "--region"
+      - "${_REGION}"
+      - "--platform"
+      - "managed"
+      - "--memory"
+      - "4Gi"
+      - "--cpu"
+      - "2"
+      - "--min-instances"
+      - "1"
+      - "--max-instances"
+      - "5"
+      - "--no-allow-unauthenticated"
+      - "--no-cpu-throttling"
+      # Non-secret environment variables (using substitution variables)
+      - "--set-env-vars"
+      - "AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV=${_MAX_FILE_SIZE},AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${_ALLOWED_EXTENSIONS},AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${_REDIS_CHANNEL},AUDIO_TEXT_CELERY_QUEUE_NAME_ENV=${_CELERY_QUEUE},AUDIO_TEXT_CELERY_ROUTING_KEY_ENV=${_CELERY_ROUTING_KEY},AUDIO_TEXT_DB_REF_TABLE_ENV=${_DB_REF_TABLE}"
+      # Secrets from Secret Manager (injected at runtime)
+      - "--update-secrets"
+      - "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+
+# Substitution variables with defaults
+substitutions:
+  _REGION: europe-west4
+
+  # Application configuration (non-secret)
+  _MAX_FILE_SIZE: "100"
+  _ALLOWED_EXTENSIONS: "mp3,wav,flac,mp4,m4a,aac,ogg"
+  _RATE_LIMIT_MINUTE: "60"
+  _RATE_LIMIT_HOUR: "1000"
+
+  # Stable constants
+  _REDIS_CHANNEL: "job_updates"
+  _CELERY_QUEUE: "audio_processing"
+  _CELERY_ROUTING_KEY: "audio_processing"
+  _DB_REF_TABLE: "transcription_job"
+
+# Increase timeout for ML model downloads in worker build
+timeout: 1800s # 30 minutes
+
+# Use faster machine type for builds
+options:
+  machineType: "N1_HIGHCPU_8"
+  logging: CLOUD_LOGGING_ONLY

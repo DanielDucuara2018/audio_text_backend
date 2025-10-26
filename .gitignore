@@ -169,7 +169,10 @@ cython_debug/
 [Ll]ib
 [Ll]ib64
 [Ll]ocal
-[Ss]cripts
+# Only ignore Scripts in venv directories
+.venv/[Ss]cripts
+venv/[Ss]cripts
+ENV/[Ss]cripts
 pyvenv.cfg
 pip-selfcheck.json
 
