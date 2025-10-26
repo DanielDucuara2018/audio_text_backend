@@ -11,6 +11,16 @@ REGION="europe-west4"
 SERVICE="all"
 TAG="latest"
 
+# Application configuration (matching ci/deployment.yaml defaults)
+MAX_FILE_SIZE="${AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV:-100}"
+ALLOWED_EXTENSIONS="${AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV:-mp3,wav,flac,mp4,m4a,aac,ogg}"
+RATE_LIMIT_MINUTE="${AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV:-60}"
+RATE_LIMIT_HOUR="${AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV:-1000}"
+REDIS_CHANNEL="${AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV:-job_updates}"
+CELERY_QUEUE="${AUDIO_TEXT_CELERY_QUEUE_NAME_ENV:-audio_processing}"
+CELERY_ROUTING_KEY="${AUDIO_TEXT_CELERY_ROUTING_KEY_ENV:-audio_processing}"
+DB_REF_TABLE="${AUDIO_TEXT_DB_REF_TABLE_ENV:-transcription_job}"
+
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -74,7 +84,9 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --min-instances 0 \
         --max-instances 10 \
         --allow-unauthenticated \
-        --port 3203
+        --port 3203 \
+        --set-env-vars "AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV=${MAX_FILE_SIZE},AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${ALLOWED_EXTENSIONS},AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV=${RATE_LIMIT_MINUTE},AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV=${RATE_LIMIT_HOUR},AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL},AUDIO_TEXT_CELERY_QUEUE_NAME_ENV=${CELERY_QUEUE},AUDIO_TEXT_CELERY_ROUTING_KEY_ENV=${CELERY_ROUTING_KEY},AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 fi
 
 # Build and deploy Worker
@@ -92,7 +104,10 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --min-instances 1 \
         --max-instances 5 \
         --no-allow-unauthenticated \
-        --port 3203
+        --no-cpu-throttling \
+        --port 3203 \
+        --set-env-vars "AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV=${MAX_FILE_SIZE},AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${ALLOWED_EXTENSIONS},AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL},AUDIO_TEXT_CELERY_QUEUE_NAME_ENV=${CELERY_QUEUE},AUDIO_TEXT_CELERY_ROUTING_KEY_ENV=${CELERY_ROUTING_KEY},AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 fi
 
 echo ""
