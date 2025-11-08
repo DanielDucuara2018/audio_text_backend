@@ -10,6 +10,7 @@ from redis import asyncio as aioredis
 from audio_text_backend.action.tasks import process_audio
 from audio_text_backend.config import Config
 from audio_text_backend.model.transcription_job import JobStatus, TranscriptionJob
+from audio_text_backend.utils import idun
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,9 @@ def create(filename: str, url: str, mode: str) -> TranscriptionJob:
     # Create job record in database
     job = TranscriptionJob(filename=filename, url=url, status=JobStatus.PENDING).create()
     # Start background processing with Celery
-    task_id = process_audio.delay(job.id, job.filename, mode)
+    task_id = process_audio.delay(
+        job.id, job.filename, mode
+    )  # TODO check if it can be added to DB TranscriptionJob
     logger.info(f"Started Celery task {task_id} for job {job.id}")
     return job
 
@@ -201,7 +204,7 @@ class JobUpdateManager:
                 result_text=data.get("text"),
                 processing_time_seconds=data.get("processing_time"),
                 error=f"{data.get('message')} {data.get('error')}" if status == "failed" else None,
-            )
+            )  # TODO Update other fields as needed
             logger.info(f"Updated job {job_id} status to {job.status}")
         except Exception as e:
             logger.error(f"Failed to update job {job_id} status to {job.status}: {e}")
@@ -278,90 +281,179 @@ async def establish_connection(job_id: str, websocket: WebSocket):
     Note: WebSocket lifecycle (accept/close) is managed by FastAPI router.
     This function handles business logic: Redis pub/sub and connection tracking.
     """
+    # Generate unique ID for this connection to track it in logs
+    connection_id = idun("websocket")
+    logger.info(f"[{connection_id}] WebSocket handler starting for job: {job_id}")
+
     async with JobUpdateManager() as manager:
         try:
             await manager.connect(websocket, job_id)
-            logger.info(f"WebSocket connected for job: {job_id}")
+            logger.info(f"[{connection_id}] WebSocket connected for job: {job_id}")
 
-            await _send_connection_confirmation(websocket, job_id)
-            await _handle_websocket_lifecycle(websocket, job_id, manager)
+            await _send_connection_confirmation(websocket, job_id, connection_id)
+            await _handle_websocket_lifecycle(websocket, job_id, manager, connection_id)
         except WebSocketDisconnect:
-            logger.info(f"WebSocket disconnected for job: {job_id}")
+            logger.info(f"[{connection_id}] WebSocket disconnected for job: {job_id}")
         except Exception as e:
-            logger.error(f"WebSocket error for job {job_id}: {e}")
+            logger.error(f"[{connection_id}] WebSocket error for job {job_id}: {e}")
             await _handle_websocket_error(websocket, job_id, e)
         finally:
             # Only remove from tracking - FastAPI router handles connection closure
             manager.remove_connection(websocket, job_id)
-            logger.info(f"WebSocket connection tracking cleanup completed for job: {job_id}")
+            logger.info(
+                f"[{connection_id}] WebSocket connection tracking cleanup completed for job: {job_id}"
+            )
 
 
-async def _send_connection_confirmation(websocket: WebSocket, job_id: str):
+async def _send_connection_confirmation(websocket: WebSocket, job_id: str, connection_id: str):
     """Send initial connection confirmation to client."""
     confirmation_message = {
         "type": "connected",
         "job_id": job_id,
+        "connection_id": connection_id,  # Include connection ID for debugging
         "message": "Connected to job updates",
         "timestamp": datetime.now().isoformat(),
     }
 
     try:
         await websocket.send_json(confirmation_message)
-        logger.debug(f"Sent connection confirmation for job: {job_id}")
+        logger.debug(f"[{connection_id}] Sent connection confirmation for job: {job_id}")
     except Exception as e:
-        logger.error(f"Failed to send connection confirmation for job {job_id}: {e}")
+        logger.error(
+            f"[{connection_id}] Failed to send connection confirmation for job {job_id}: {e}"
+        )
         raise
 
 
 async def _handle_websocket_lifecycle(
-    websocket: WebSocket, job_id: str, manager: "JobUpdateManager"
+    websocket: WebSocket, job_id: str, manager: "JobUpdateManager", connection_id: str
 ):
     """Handle WebSocket lifecycle including keepalive and client messages."""
+    consecutive_ping_failures = 0
+    max_ping_failures = 3  # Disconnect after 3 failed pings
+
+    logger.info(f"[{connection_id}] Starting lifecycle loop for job: {job_id}")
+
     while True:
         try:
-            await _process_client_message(websocket, job_id)
+            await _process_client_message(websocket, job_id, connection_id)
+            consecutive_ping_failures = 0
         except asyncio.TimeoutError:
-            await _send_keepalive_ping(websocket)
+            consecutive_ping_failures = await _handle_timeout_with_ping(
+                websocket,
+                job_id,
+                consecutive_ping_failures,
+                max_ping_failures,
+                manager,
+                connection_id,
+            )
+            if consecutive_ping_failures >= max_ping_failures:
+                logger.info(f"[{connection_id}] Max ping failures reached, exiting lifecycle loop")
+                break
         except WebSocketDisconnect:
-            logger.info(f"Client disconnected for job: {job_id}")
-            # Only remove from tracking - FastAPI router handles connection closure
+            logger.info(f"[{connection_id}] Client disconnected for job: {job_id}")
             manager.remove_connection(websocket, job_id)
             break
         except Exception as e:
-            logger.error(f"Error processing client message for job {job_id}: {e}")
-            # Continue listening for other messages
-            await asyncio.sleep(0.1)
+            consecutive_ping_failures = await _handle_error_with_message(
+                websocket,
+                job_id,
+                consecutive_ping_failures,
+                max_ping_failures,
+                manager,
+                e,
+                connection_id,
+            )
+            if consecutive_ping_failures >= max_ping_failures:
+                logger.info(f"[{connection_id}] Max errors reached, exiting lifecycle loop")
+                break
+
+    logger.info(f"[{connection_id}] Lifecycle loop ended for job: {job_id}")
 
 
-async def _process_client_message(websocket: WebSocket, job_id: str):
+async def _handle_timeout_with_ping(
+    websocket: WebSocket,
+    job_id: str,
+    consecutive_ping_failures: int,
+    max_ping_failures: int,
+    manager: "JobUpdateManager",
+    connection_id: str,
+) -> int:
+    """Handle timeout by sending ping and tracking failures."""
+    try:
+        await _send_keepalive_ping(websocket, connection_id)
+        consecutive_ping_failures = 0
+    except Exception as ping_error:
+        consecutive_ping_failures = await _handle_error_with_message(
+            websocket,
+            job_id,
+            consecutive_ping_failures,
+            max_ping_failures,
+            manager,
+            ping_error,
+            connection_id,
+        )
+    return consecutive_ping_failures
+
+
+async def _handle_error_with_message(
+    websocket: WebSocket,
+    job_id: str,
+    consecutive_ping_failures: int,
+    max_ping_failures: int,
+    manager: "JobUpdateManager",
+    error: Exception,
+    connection_id: str,
+) -> int:
+    """Handle errors during message processing."""
+    consecutive_ping_failures += 1
+    logger.warning(
+        f"[{connection_id}] message failed for job {job_id} "
+        f"({consecutive_ping_failures}/{max_ping_failures}): {error}"
+    )
+
+    if consecutive_ping_failures >= max_ping_failures:
+        logger.info(f"[{connection_id}] Connection dead for job {job_id} - closing")
+        manager.remove_connection(websocket, job_id)
+    else:
+        # Small delay to prevent tight loop on repeated errors
+        await asyncio.sleep(0.1)
+
+    return consecutive_ping_failures
+
+
+async def _process_client_message(websocket: WebSocket, job_id: str, connection_id: str):
     """Process incoming client messages with timeout."""
-    data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+    # Reduced timeout to detect disconnects faster
+    data = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
 
     # Echo back for connection testing
     echo_message = {
         "type": "echo",
         "data": data,
         "job_id": job_id,
+        "connection_id": connection_id,
         "timestamp": datetime.now().isoformat(),
     }
 
     await websocket.send_json(echo_message)
-    logger.debug(f"Echoed client message for job {job_id}: {data}")
+    logger.debug(f"[{connection_id}] Echoed client message for job {job_id}: {data}")
 
 
-async def _send_keepalive_ping(websocket: WebSocket):
+async def _send_keepalive_ping(websocket: WebSocket, connection_id: str):
     """Send keepalive ping to maintain connection."""
     ping_message = {
         "type": "ping",
+        "connection_id": connection_id,
         "timestamp": datetime.now().isoformat(),
         "message": "Connection keepalive",
     }
 
     try:
         await websocket.send_json(ping_message)
-        logger.debug("Sent keepalive ping")
+        logger.debug(f"[{connection_id}] Sent keepalive ping")
     except Exception as e:
-        logger.warning(f"Failed to send keepalive ping: {e}")
+        logger.warning(f"[{connection_id}] Failed to send keepalive ping: {e}")
         raise
 
 

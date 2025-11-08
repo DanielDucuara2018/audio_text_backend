@@ -56,9 +56,9 @@ class Celery:
     worker_disable_rate_limits: bool = True
     worker_max_tasks_per_child: int = 10
 
-    # Task time limits (in seconds)
-    task_time_limit: int = 1800  # 30 minutes
-    task_soft_time_limit: int = 1500  # 25 minutes
+    # Task time limits (in seconds) - Updated for faster-whisper
+    task_time_limit: int = 600  # Configurable hard limit (default: 600s / 10 min)
+    task_soft_time_limit: int = 480  # Configurable soft limit (default: 480s / 8 min)
 
     # Retry settings
     task_default_retry_delay: int = 60  # 1 minute
@@ -88,6 +88,24 @@ class File:
     allowed_audio_extensions: list[str]
 
 
+@dataclass
+class Whisper:
+    """Faster-whisper model configuration."""
+
+    # Model configuration
+    device: str  # cpu or cuda
+    compute_type: str  # int8, float16, float32, int8_float16
+    cpu_threads: int  # 0=auto, or specific number
+
+    # Transcription parameters
+    beam_size: int  # 1=fastest, 5=balanced, 10=best quality
+
+    # Feature flags
+    vad_filter: bool  # Enable Voice Activity Detection
+    vad_min_silence_duration_ms: int  # Minimum silence duration to remove
+    word_timestamps: bool = False  # Enable word-level timestamps
+
+
 @load_configuration
 @dataclass
 class Config:
@@ -97,6 +115,7 @@ class Config:
     celery: Celery
     aws: AWS
     file: File
+    whisper: Whisper
 
 
 def bootstrap_configuration(path: str | Path = ROOT.joinpath("config.ini")) -> None:

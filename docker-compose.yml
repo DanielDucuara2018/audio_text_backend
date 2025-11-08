@@ -25,6 +25,7 @@ services:
       # Only mount source code for development (not dependencies)
       - ./audio_text_backend:/app/audio_text_backend
       - ./alembic:/app/alembic
+      - ./config.ini:/app/config.ini
       - /app/audio_text_backend.egg-info/
     env_file:
       - .env
@@ -93,6 +94,7 @@ services:
     volumes:
       # Only mount source code for development
       - ./audio_text_backend:/app/audio_text_backend
+      - ./config.ini:/app/config.ini
     env_file:
       - .env
     environment:

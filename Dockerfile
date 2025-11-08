@@ -43,7 +43,7 @@ RUN apt-get update -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Install worker dependencies for local testing
+# Install worker dependencies (faster-whisper) for local testing
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir --editable ".[worker]"
 
@@ -77,7 +77,7 @@ EXPOSE 3203
 CMD ["uvicorn", "audio_text_backend.api.api:app", "--host", "0.0.0.0", "--port", "3203", "--workers", "4"]
 
 # ============================================================================
-# WORKER PRODUCTION STAGE - Celery worker with ML/Whisper
+# WORKER PRODUCTION STAGE - Celery worker with faster-whisper
 # ============================================================================
 FROM base AS worker
 
@@ -92,7 +92,7 @@ RUN apt-get update -y && \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir --upgrade pip
 
-# Install core dependencies + ML/worker dependencies
+# Install core dependencies + ML/worker dependencies (faster-whisper)
 COPY pyproject.toml README.md ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-cache-dir --editable ".[worker]"
@@ -100,13 +100,21 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy application code
 COPY audio_text_backend/ ./audio_text_backend/
 COPY config.ini ./
+COPY scripts/start_worker.sh ./scripts/
 
-# Pre-download Whisper models during build (cache them in the image)
-# This prevents downloads during container startup
-RUN python -c "import whisper; \
-    whisper.load_model('tiny'); \
-    whisper.load_model('base'); \
-    whisper.load_model('small')"
+# Make the start script executable
+RUN chmod +x scripts/start_worker.sh
+
+# Pre-download faster-whisper CTranslate2 models with int8 quantization
+# This prevents downloads during container startup and reduces image size
+RUN python -c "from faster_whisper import WhisperModel; \
+    print('Downloading tiny model...'); \
+    WhisperModel('tiny', device='cpu', compute_type='int8'); \
+    print('Downloading base model...'); \
+    WhisperModel('base', device='cpu', compute_type='int8'); \
+    print('Downloading small model...'); \
+    WhisperModel('small', device='cpu', compute_type='int8'); \
+    print('All models downloaded successfully!')"
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && \
@@ -114,9 +122,7 @@ RUN useradd -m -u 1000 appuser && \
 
 USER appuser
 
-# Celery worker command
-CMD ["celery", "-A", "audio_text_backend.celery.app", "worker", \
-    "--loglevel=info", \
-    "--concurrency=1", \
-    "--max-tasks-per-child=5", \
-    "-Q", "audio_processing"]
+EXPOSE 8080
+
+# Celery worker with health check HTTP server
+CMD ["./scripts/start_worker.sh"]

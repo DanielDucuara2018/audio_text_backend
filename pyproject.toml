@@ -39,7 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # ML/Worker dependencies (only for Celery workers doing audio processing)
-worker = ["openai-whisper==20231117", "setuptools-rust==1.9.0"]
+worker = ["faster-whisper>=1.0.0", "setuptools-rust==1.9.0", "requests==2.31.0"]
 dev = ["ruff>=0.12.10", "pre-commit>=4.3.0", "setuptools==80.9.0"]
 test = [
   "pytest==6.2.4",

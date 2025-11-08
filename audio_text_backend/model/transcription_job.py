@@ -28,3 +28,8 @@ class TranscriptionJob(Base, Resource):
     result_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     processing_time_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # TODO New fields from faster-whisper
+    # language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # language_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # duration: Mapped[float | None] = mapped_column(Float, nullable=True)

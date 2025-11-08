@@ -2,15 +2,19 @@ import json
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import redis
-import whisper
 from celery import current_task
 
 from audio_text_backend.action.audio import storage
 from audio_text_backend.celery.app import celery_app as app
 from audio_text_backend.config import Config
 from audio_text_backend.errors import FileProcessingError, StorageError, TranscriptionError
+
+# Lazy import for type hints only (not at runtime)
+if TYPE_CHECKING:
+    from faster_whisper import WhisperModel
 
 logger = logging.getLogger(__name__)
 
@@ -24,16 +28,30 @@ TMP_FOLDER = BASE_DIR.joinpath("tmp")
 if not TMP_FOLDER.exists():
     TMP_FOLDER.mkdir(parents=True, exist_ok=True)
 
-# Load Whisper model once when worker starts
+# Load Whisper model once when worker starts (faster-whisper)
+# Lazy import to avoid ImportError in API container
 whisper_models = {}
 
 
-def get_whisper_model(model_name: str) -> whisper.Whisper:
-    """Get or load whisper model."""
+def get_whisper_model(model_name: str) -> "WhisperModel":
+    """Get or load faster-whisper model with optimized settings."""
+    # Lazy import - only imported when worker actually calls this function
+    from faster_whisper import WhisperModel
+
     if model_name not in whisper_models:
-        logger.info(f"Loading Whisper model: {model_name}")
+        logger.info(f"Loading Faster-Whisper model: {model_name}")
         try:
-            whisper_models[model_name] = whisper.load_model(model_name)
+            whisper_models[model_name] = WhisperModel(
+                model_name,
+                device=Config.whisper.device,
+                compute_type=Config.whisper.compute_type,
+                cpu_threads=Config.whisper.cpu_threads if Config.whisper.cpu_threads > 0 else None,
+                num_workers=1,  # Let Celery handle parallelism
+            )
+            logger.info(
+                f"Model loaded successfully: {model_name} "
+                f"(device={Config.whisper.device}, compute_type={Config.whisper.compute_type})"
+            )
         except Exception as e:
             raise TranscriptionError(
                 message=f"Failed to load Whisper model: {model_name}", error=str(e)
@@ -61,7 +79,7 @@ def process_audio(job_id: str, filename: str, mode: str):
         file_path = _download_audio_file(job_id, filename)
         transcription_result = _transcribe_audio_file(job_id, filename, mode, file_path)
         processing_time = _finalize_job_success(job_id, transcription_result, start_time)
-        _cleanup_resources(filename, file_path)
+        _cleanup_resources(filename)
 
         logger.info(f"Successfully processed job {job_id} in {processing_time:.2f}s")
         return {"text": transcription_result["text"], "processing_time": processing_time}
@@ -107,8 +125,39 @@ def _download_audio_file(job_id: str, filename: str) -> Path:
     return file_path
 
 
+def _run_transcription(model: "WhisperModel", file_path: Path) -> tuple[list[Any], Any]:
+    """Run the actual transcription with configured parameters."""
+    vad_params = None
+    if Config.whisper.vad_filter:
+        vad_params = {"min_silence_duration_ms": Config.whisper.vad_min_silence_duration_ms}
+
+    segments, info = model.transcribe(
+        str(file_path),
+        beam_size=Config.whisper.beam_size,
+        word_timestamps=Config.whisper.word_timestamps,
+        vad_filter=Config.whisper.vad_filter,
+        vad_parameters=vad_params,
+        temperature=0.0,  # Deterministic for consistency
+        condition_on_previous_text=True,  # Better context
+    )
+    return list(segments), info
+
+
+def _build_transcription_result(segments_list: list, info) -> dict:
+    """Build complete transcription result with metadata."""
+    # Build complete transcript
+    full_text = " ".join([segment.text.strip() for segment in segments_list])
+
+    # Build result with enhanced metadata
+    return {
+        "text": full_text,
+        "language": info.language,
+        "language_probability": info.language_probability,
+    }
+
+
 def _transcribe_audio_file(job_id: str, filename: str, mode: str, file_path: Path) -> dict:
-    """Transcribe audio file using Whisper model."""
+    """Transcribe audio file using faster-whisper model."""
     current_task.update_state(state="PROGRESS", meta={"progress": 30})
     send_redis_update({
         "job_id": job_id,
@@ -120,11 +169,17 @@ def _transcribe_audio_file(job_id: str, filename: str, mode: str, file_path: Pat
 
     logger.info(f"Processing audio file: {filename} with model: {mode}")
 
-    try:
-        model = get_whisper_model(mode)
-        result = model.transcribe(str(file_path))
-    except Exception as e:
-        raise TranscriptionError(message="Failed to transcribe audio", job_id=job_id, error=str(e))
+    # Load model and run transcription
+    model = get_whisper_model(mode)
+    segments_list, info = _run_transcription(model, file_path)
+
+    # Build structured result
+    result = _build_transcription_result(segments_list, info)
+
+    logger.info(
+        f"Transcription complete: {len(segments_list)} segments, "
+        f"language={info.language} ({info.language_probability:.2%})"
+    )
 
     return result
 
@@ -144,12 +199,15 @@ def _finalize_job_success(job_id: str, result: dict, start_time: datetime) -> fl
     processing_time = (datetime.now() - start_time).total_seconds()
 
     current_task.update_state(state="COMPLETED", meta={"progress": 100})
-    # Send completion update
+
+    # Send completion update with enhanced data
     send_redis_update({
         "job_id": job_id,
         "status": "completed",
         "progress": 100,
         "result": result["text"],
+        "language": result["language"],
+        "language_probability": result["language_probability"],
         "processing_time": processing_time,
         "message": "Transcription completed successfully",
         "type": "job_update",
@@ -158,7 +216,7 @@ def _finalize_job_success(job_id: str, result: dict, start_time: datetime) -> fl
     return processing_time
 
 
-def _cleanup_resources(filename: str, file_path: Path):
+def _cleanup_resources(filename: str):
     """Clean up S3 file and other resources."""
     try:
         storage.delete_file(filename)
