@@ -13,8 +13,9 @@ logger = logging.getLogger(__name__)
 def validate_audio_file(filename: str, content_type: str, file_size: int) -> None:
     """Validate uploaded audio file."""
     _validate_file_size(file_size)
-    _validate_content_type(content_type)
-    _validate_file_extension(filename)
+    extension = _extract_file_extension(filename)
+    _validate_file_extension(extension)
+    _validate_content_type(content_type, extension)
 
 
 def _validate_file_size(file_size: int) -> None:
@@ -30,15 +31,25 @@ def _validate_file_size(file_size: int) -> None:
         )
 
 
-def _validate_content_type(content_type: str) -> None:
-    """Validate that the content type is an audio format."""
-    if not content_type.startswith("audio/"):
+def _validate_content_type(content_type: str, extension: str) -> None:
+    """Validate that the content type is an audio format.
+
+    Special case: MP4 and M4A files can have video/mp4 MIME type even when they're audio-only.
+    """
+    # Allow video/* MIME type only for MP4 and M4A audio files
+    if content_type.startswith("video/"):
+        if extension not in ["mp4", "m4a"]:
+            raise FileValidationError(
+                message="Video files are not allowed",
+                content_type=content_type,
+                extension=extension,
+            )
+    elif not content_type.startswith("audio/"):
         raise FileValidationError(message="File must be an audio file", content_type=content_type)
 
 
-def _validate_file_extension(filename: str) -> None:
+def _validate_file_extension(extension: str) -> None:
     """Validate that the file extension is allowed."""
-    extension = _extract_file_extension(filename)
     allowed_extensions = Config.file.allowed_audio_extensions
 
     if extension not in allowed_extensions:
