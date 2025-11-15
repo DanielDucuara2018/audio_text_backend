@@ -16,14 +16,40 @@ logger = logging.getLogger(__name__)
 
 
 def create(filename: str, url: str, mode: str) -> TranscriptionJob:
-    """Start audio transcription job."""
+    """Start audio transcription job.
+
+    Args:
+        filename: Name of the audio file to transcribe
+        url: URL/path to the audio file
+        mode: Whisper model to use (tiny, base, small, medium, large-v2, large-v3)
+
+    Returns:
+        TranscriptionJob instance with job details
+
+    """
     # Create job record in database
     job = TranscriptionJob(filename=filename, url=url, status=JobStatus.PENDING).create()
-    # Start background processing with Celery
-    task_id = process_audio.delay(
-        job.id, job.filename, mode
-    )  # TODO check if it can be added to DB TranscriptionJob
-    logger.info(f"Started Celery task {task_id} for job {job.id}")
+
+    # Get queue configuration for the selected model
+    queue_config = Config.celery.queues.get(mode, Config.celery.queues.get("default"))
+    queue_name = queue_config.queue_name
+
+    logger.info(f"Job {job.id}: Routing to queue '{queue_name}' for model '{mode}'")
+
+    # Start background processing with Celery using dynamic queue routing
+    task = process_audio.apply_async(
+        args=[job.id, job.filename, mode],
+        queue=queue_name,
+        retry=True,
+        retry_policy={
+            "max_retries": queue_config.retry_policy_max_retries,
+            "interval_start": queue_config.retry_policy_interval_start,
+            "interval_step": queue_config.retry_policy_interval_step,
+            "interval_max": queue_config.retry_policy_interval_max,
+        },
+    )
+
+    logger.info(f"Started Celery task {task.id} for job {job.id} on queue '{queue_name}'")
     return job
 
 

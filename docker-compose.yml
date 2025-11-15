@@ -79,7 +79,60 @@ services:
       retries: 3
       start_period: 5s
 
-  celery-worker:
+  # Dedicated worker for small models (dev multi-queue testing)
+  celery-worker-small:
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+      target: dev
+    networks:
+      audio_text_bridge:
+        ipv4_address: 169.254.9.5
+        aliases:
+          - "audio-text-backend.celery-small"
+    volumes:
+      - ./audio_text_backend:/app/audio_text_backend
+      - ./config.ini:/app/config.ini
+    env_file:
+      - .env
+    environment:
+      - C_FORCE_ROOT=true
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=4 -Q audio_small
+    profiles: ["multi-queue"]
+
+  # Dedicated worker for medium models (dev multi-queue testing)
+  celery-worker-medium:
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+      target: dev
+    networks:
+      audio_text_bridge:
+        ipv4_address: 169.254.9.6
+        aliases:
+          - "audio-text-backend.celery-medium"
+    volumes:
+      - ./audio_text_backend:/app/audio_text_backend
+      - ./config.ini:/app/config.ini
+    env_file:
+      - .env
+    environment:
+      - C_FORCE_ROOT=true
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2 -Q audio_medium
+    profiles: ["multi-queue"]
+
+  # Dedicated worker for large models (dev multi-queue testing)
+  celery-worker-large:
     build:
       context: ./
       dockerfile: ./Dockerfile
@@ -88,34 +141,30 @@ services:
         - python:3.12-slim-bookworm
     networks:
       audio_text_bridge:
-        ipv4_address: 169.254.9.5
+        ipv4_address: 169.254.9.7
         aliases:
-          - "audio-text-backend.celery"
+          - "audio-text-backend.celery-large"
     volumes:
-      # Only mount source code for development
       - ./audio_text_backend:/app/audio_text_backend
       - ./config.ini:/app/config.ini
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=redis://audio-text-backend.cache:6379/0
-      - CELERY_RESULT_BACKEND=redis://audio-text-backend.cache:6379/0
       - C_FORCE_ROOT=true
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    command: celery -A audio_text_backend.celery.app worker --loglevel=info -Q audio_processing
+    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=1 -Q audio_large
+    profiles: ["multi-queue"]
 
   # TODO not working yet, connection to redis issue
   # flower:
   #   image: mher/flower:2.0
   #   networks:
   #     audio_text_bridge:
-  #       ipv4_address: 169.254.9.6
+  #       ipv4_address: 169.254.9.8
   #       aliases:
   #         - "audio-text-backend.flower"
   #   ports:

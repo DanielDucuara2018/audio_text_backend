@@ -1,5 +1,6 @@
 import os
 import secrets
+from configparser import ConfigParser
 from dataclasses import fields
 from typing import Any, Optional, Type, TypeVar, cast
 
@@ -33,6 +34,25 @@ def load_configuration(cls: Cls) -> Cls:
         setattr(cls, field_.name, ConfigurationField(field_.name))
     _config_fields[cls] = None
     return cls
+
+
+def build_config_dict(config: ConfigParser) -> dict:
+    result = {}
+
+    for section in config.sections():
+        parts = section.split(":")
+        node = result
+
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+
+        last = parts[-1]
+        if last in node:
+            node[last].update(dict(config.items(section)))
+        else:
+            node[last] = dict(config.items(section))
+
+    return result
 
 
 def coerce(cls: type[T], data) -> T:

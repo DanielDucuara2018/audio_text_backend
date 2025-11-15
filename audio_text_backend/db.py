@@ -1,3 +1,4 @@
+import logging
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from alembic.command import upgrade
 from alembic.config import Config as AlembicConfig
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from audio_text_backend.config import Config, Database, logging
+from audio_text_backend.config import Config, Database
 from audio_text_backend.errors import DBError
 
 ROOT = Path(__file__).parents[1]

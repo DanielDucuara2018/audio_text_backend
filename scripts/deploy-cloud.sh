@@ -6,6 +6,12 @@
 
 set -e
 
+# Get script directory
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Run populate-env-variables.sh to ensure .env exists
+"$SCRIPT_DIR/populate-env-variables.sh"
+
 # Default configuration
 PROJECT_ID=""
 REGION="europe-west4"
@@ -16,13 +22,21 @@ AUTO_FETCH_CONFIG=true
 
 # Application configuration (matching ci/deployment.yaml defaults)
 MAX_FILE_SIZE="${AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV:-100}"
-ALLOWED_EXTENSIONS="${AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV:-mp3,wav,flac,mp4,m4a,aac,ogg}"
+ALLOWED_EXTENSIONS="${AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV:-mp3,wav,flac,mp4,m4a,aac,ogg,opus}"
 RATE_LIMIT_MINUTE="${AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV:-60}"
 RATE_LIMIT_HOUR="${AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV:-1000}"
 REDIS_CHANNEL="${AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV:-job_updates}"
-CELERY_QUEUE="${AUDIO_TEXT_CELERY_QUEUE_NAME_ENV:-audio_processing}"
-CELERY_ROUTING_KEY="${AUDIO_TEXT_CELERY_ROUTING_KEY_ENV:-audio_processing}"
 DB_REF_TABLE="${AUDIO_TEXT_DB_REF_TABLE_ENV:-transcription_job}"
+
+# Queue configuration
+QUEUE_SMALL="${AUDIO_TEXT_QUEUE_SMALL_ENV:-audio_small}"
+QUEUE_MEDIUM="${AUDIO_TEXT_QUEUE_MEDIUM_ENV:-audio_medium}"
+QUEUE_LARGE="${AUDIO_TEXT_QUEUE_LARGE_ENV:-audio_large}"
+QUEUE_DEFAULT="${AUDIO_TEXT_QUEUE_DEFAULT_ENV:-audio_processing}"
+QUEUE_LARGE_RETRY_MAX="${AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV:-2}"
+QUEUE_LARGE_RETRY_START="${AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV:-0}"
+QUEUE_LARGE_RETRY_STEP="${AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV:-120}"
+QUEUE_LARGE_RETRY_MAX_INTERVAL="${AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV:-600}"
 
 # AWS Configuration
 AWS_REGION="${AUDIO_TEXT_AWS_REGION_ENV:-eu-west-3}"
@@ -52,7 +66,7 @@ API_MAX_INSTANCES="10"
 WORKER_CPU="2"
 WORKER_MEMORY="2Gi"
 WORKER_MIN_INSTANCES="1"
-WORKER_MAX_INSTANCES="5"
+WORKER_MAX_INSTANCES="10"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -194,8 +208,10 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
         --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
         --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
+        --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
         --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
         --set-env-vars "AUDIO_TEXT_AWS_BUCKET_NAME_ENV=${BUCKET_NAME}" \
         --set-env-vars "AUDIO_TEXT_AWS_REGION_ENV=${AWS_REGION}" \
         --set-env-vars "AUDIO_TEXT_CORS_ORIGINS_ENV=${CORS_ORIGINS}" \
@@ -203,10 +219,14 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --set-env-vars "^@^AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${ALLOWED_EXTENSIONS}" \
         --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV=${RATE_LIMIT_MINUTE}" \
         --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV=${RATE_LIMIT_HOUR}" \
-        --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
-        --set-env-vars "AUDIO_TEXT_CELERY_QUEUE_NAME_ENV=${CELERY_QUEUE}" \
-        --set-env-vars "AUDIO_TEXT_CELERY_ROUTING_KEY_ENV=${CELERY_ROUTING_KEY}" \
-        --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_SMALL_ENV=${QUEUE_SMALL}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_MEDIUM_ENV=${QUEUE_MEDIUM}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_ENV=${QUEUE_LARGE}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_DEFAULT_ENV=${QUEUE_DEFAULT}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV=${QUEUE_LARGE_RETRY_MAX}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV=${QUEUE_LARGE_RETRY_START}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV=${QUEUE_LARGE_RETRY_STEP}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV=${QUEUE_LARGE_RETRY_MAX_INTERVAL}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_DEVICE_ENV=${WHISPER_DEVICE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_COMPUTE_TYPE_ENV=${WHISPER_COMPUTE_TYPE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_CPU_THREADS_ENV=${WHISPER_CPU_THREADS}" \
@@ -222,7 +242,7 @@ fi
 if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
     echo ""
     echo "======================================"
-    echo "Building and Deploying Worker Service"
+    echo "Building and Deploying Worker Services"
     echo "======================================"
     echo "Building Worker image (this may take 10-15 minutes)..."
     docker build --target worker -t ${WORKER_IMAGE} .
@@ -230,8 +250,10 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
     echo "Pushing Worker image to GCR..."
     docker push ${WORKER_IMAGE}
 
-    echo "Deploying Worker to Cloud Run..."
-    gcloud run deploy audio-worker \
+    # Deploy Small Model Worker (tiny/base/small models)
+    echo ""
+    echo "Deploying Small Model Worker (${QUEUE_SMALL} queue)..."
+    gcloud run deploy audio-worker-small \
         --image ${WORKER_IMAGE} \
         --region ${REGION} \
         --platform managed \
@@ -244,13 +266,17 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --port 8080 \
         --vpc-connector ${VPC_CONNECTOR} \
         --vpc-egress private-ranges-only \
+        --set-env-vars "CELERY_QUEUE=${QUEUE_SMALL}" \
+        --set-env-vars "CELERY_CONCURRENCY=4" \
         --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
         --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
         --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
         --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
         --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
+        --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
         --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
         --set-env-vars "AUDIO_TEXT_AWS_BUCKET_NAME_ENV=${BUCKET_NAME}" \
         --set-env-vars "AUDIO_TEXT_AWS_REGION_ENV=${AWS_REGION}" \
         --set-env-vars "AUDIO_TEXT_CORS_ORIGINS_ENV=${CORS_ORIGINS}" \
@@ -258,10 +284,14 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "^@^AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${ALLOWED_EXTENSIONS}" \
         --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV=${RATE_LIMIT_MINUTE}" \
         --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV=${RATE_LIMIT_HOUR}" \
-        --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
-        --set-env-vars "AUDIO_TEXT_CELERY_QUEUE_NAME_ENV=${CELERY_QUEUE}" \
-        --set-env-vars "AUDIO_TEXT_CELERY_ROUTING_KEY_ENV=${CELERY_ROUTING_KEY}" \
-        --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_SMALL_ENV=${QUEUE_SMALL}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_MEDIUM_ENV=${QUEUE_MEDIUM}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_ENV=${QUEUE_LARGE}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_DEFAULT_ENV=${QUEUE_DEFAULT}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV=${QUEUE_LARGE_RETRY_MAX}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV=${QUEUE_LARGE_RETRY_START}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV=${QUEUE_LARGE_RETRY_STEP}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV=${QUEUE_LARGE_RETRY_MAX_INTERVAL}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_DEVICE_ENV=${WHISPER_DEVICE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_COMPUTE_TYPE_ENV=${WHISPER_COMPUTE_TYPE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_CPU_THREADS_ENV=${WHISPER_CPU_THREADS}" \
@@ -270,7 +300,111 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
         --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 
-    echo "✅ Worker service deployed successfully"
+    echo "✅ Small model worker deployed successfully"
+
+    # Deploy Medium Model Worker (medium models)
+    echo ""
+    echo "Deploying Medium Model Worker (${QUEUE_MEDIUM} queue)..."
+    gcloud run deploy audio-worker-medium \
+        --image ${WORKER_IMAGE} \
+        --region ${REGION} \
+        --platform managed \
+        --memory ${WORKER_MEMORY} \
+        --cpu ${WORKER_CPU} \
+        --min-instances ${WORKER_MIN_INSTANCES} \
+        --max-instances 5 \
+        --no-allow-unauthenticated \
+        --no-cpu-throttling \
+        --port 8080 \
+        --vpc-connector ${VPC_CONNECTOR} \
+        --vpc-egress private-ranges-only \
+        --set-env-vars "CELERY_QUEUE=${QUEUE_MEDIUM}" \
+        --set-env-vars "CELERY_CONCURRENCY=2" \
+        --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
+        --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
+        --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
+        --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
+        --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
+        --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
+        --set-env-vars "AUDIO_TEXT_AWS_BUCKET_NAME_ENV=${BUCKET_NAME}" \
+        --set-env-vars "AUDIO_TEXT_AWS_REGION_ENV=${AWS_REGION}" \
+        --set-env-vars "AUDIO_TEXT_CORS_ORIGINS_ENV=${CORS_ORIGINS}" \
+        --set-env-vars "AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV=${MAX_FILE_SIZE}" \
+        --set-env-vars "^@^AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${ALLOWED_EXTENSIONS}" \
+        --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV=${RATE_LIMIT_MINUTE}" \
+        --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV=${RATE_LIMIT_HOUR}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_SMALL_ENV=${QUEUE_SMALL}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_MEDIUM_ENV=${QUEUE_MEDIUM}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_ENV=${QUEUE_LARGE}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_DEFAULT_ENV=${QUEUE_DEFAULT}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV=${QUEUE_LARGE_RETRY_MAX}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV=${QUEUE_LARGE_RETRY_START}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV=${QUEUE_LARGE_RETRY_STEP}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV=${QUEUE_LARGE_RETRY_MAX_INTERVAL}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_DEVICE_ENV=${WHISPER_DEVICE}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_COMPUTE_TYPE_ENV=${WHISPER_COMPUTE_TYPE}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_CPU_THREADS_ENV=${WHISPER_CPU_THREADS}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
+        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+
+    echo "✅ Medium model worker deployed successfully"
+
+    # Deploy Large Model Worker (large-v2/large-v3 models)
+    echo ""
+    echo "Deploying Large Model Worker (${QUEUE_LARGE} queue)..."
+    gcloud run deploy audio-worker-large \
+        --image ${WORKER_IMAGE} \
+        --region ${REGION} \
+        --platform managed \
+        --memory ${WORKER_MEMORY} \
+        --cpu ${WORKER_CPU} \
+        --min-instances 0 \
+        --max-instances 3 \
+        --no-allow-unauthenticated \
+        --no-cpu-throttling \
+        --port 8080 \
+        --vpc-connector ${VPC_CONNECTOR} \
+        --vpc-egress private-ranges-only \
+        --set-env-vars "CELERY_QUEUE=${QUEUE_LARGE}" \
+        --set-env-vars "CELERY_CONCURRENCY=1" \
+        --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
+        --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
+        --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
+        --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
+        --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
+        --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
+        --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
+        --set-env-vars "AUDIO_TEXT_AWS_BUCKET_NAME_ENV=${BUCKET_NAME}" \
+        --set-env-vars "AUDIO_TEXT_AWS_REGION_ENV=${AWS_REGION}" \
+        --set-env-vars "AUDIO_TEXT_CORS_ORIGINS_ENV=${CORS_ORIGINS}" \
+        --set-env-vars "AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV=${MAX_FILE_SIZE}" \
+        --set-env-vars "^@^AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV=${ALLOWED_EXTENSIONS}" \
+        --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV=${RATE_LIMIT_MINUTE}" \
+        --set-env-vars "AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV=${RATE_LIMIT_HOUR}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_SMALL_ENV=${QUEUE_SMALL}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_MEDIUM_ENV=${QUEUE_MEDIUM}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_ENV=${QUEUE_LARGE}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_DEFAULT_ENV=${QUEUE_DEFAULT}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV=${QUEUE_LARGE_RETRY_MAX}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV=${QUEUE_LARGE_RETRY_START}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV=${QUEUE_LARGE_RETRY_STEP}" \
+        --set-env-vars "AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV=${QUEUE_LARGE_RETRY_MAX_INTERVAL}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_DEVICE_ENV=${WHISPER_DEVICE}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_COMPUTE_TYPE_ENV=${WHISPER_COMPUTE_TYPE}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_CPU_THREADS_ENV=${WHISPER_CPU_THREADS}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
+        --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
+        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+
+    echo "✅ Large model worker deployed successfully"
 fi
 
 echo ""
@@ -280,4 +414,15 @@ echo "======================================"
 echo "View services: gcloud run services list --region ${REGION}"
 echo ""
 echo "API URL: https://audio-api-<hash>-${REGION}.run.app"
-echo "Worker URL: https://audio-worker-<hash>-${REGION}.run.app (internal only)"
+echo ""
+echo "Worker Services:"
+echo "  - Small models (tiny/base/small): audio-worker-small (min=1, max=10, concurrency=4)"
+echo "  - Medium models: audio-worker-medium (min=1, max=5, concurrency=2)"
+echo "  - Large models (v2/v3): audio-worker-large (min=0, max=3, concurrency=1)"
+echo "  - Fallback (legacy): audio-worker (${QUEUE_DEFAULT} queue)"
+echo ""
+echo "Queue Routing:"
+echo "  - tiny/base/small → ${QUEUE_SMALL} queue"
+echo "  - medium → ${QUEUE_MEDIUM} queue"
+echo "  - large-v2/large-v3 → ${QUEUE_LARGE} queue"
+echo "  - unknown models → ${QUEUE_DEFAULT} queue (fallback)"

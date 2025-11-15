@@ -30,24 +30,7 @@ celery_app.conf.update(
     task_max_retries=Config.celery.task_max_retries,
     # Auto-scaling configuration
     worker_autoscaler=Config.celery.worker_autoscaler,
-    # Task routing for different queues
-    task_routes={
-        "audio_text_backend.action.tasks.process_audio": {
-            "queue": Config.celery.queue_name,
-            "routing_key": Config.celery.routing_key,
-            "retry": True,
-            "retry_policy": {
-                "max_retries": Config.celery.retry_policy_max_retries,
-                "interval_start": Config.celery.retry_policy_interval_start,
-                "interval_step": Config.celery.retry_policy_interval_step,
-                "interval_max": Config.celery.retry_policy_interval_max,
-            },
-        }
-    },
+    # Task routing removed - queue is specified at task submission time via apply_async(queue=...)
+    # This allows dynamic queue selection based on Whisper model size
+    # Retry policy is configured per-task in apply_async() call
 )
-
-# Explicit queue definitions for better control (string-based)
-# celery_app.conf.task_queues = [
-#     Config.celery.queue_name,
-#     'default',  # Default queue for other tasks
-# ]

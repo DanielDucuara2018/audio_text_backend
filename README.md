@@ -13,12 +13,19 @@ graph TB
 
    Client -- "3.1 Request Transcription" --> API
    API -- "3.2 Add job entry" --> DB[(PostgreSQL Database<br/>:5432)]
-   API -- "3.3 Job queued for celery" --> Redis[(Redis Cache/Queue<br/>:6379)]
+   API -- "3.3 Route to queue by model size" --> Redis[(Redis Cache/Queue<br/>:6379)]
 
-   Redis -- "4.1 Gives the job to worker" --> Worker[Celery Worker<br/>audio_processing queue]
-   Worker -- "4.2 Download file" --> S3
-   Worker -- "4.3 Run transcription" --> Whisper[faster-whisper Model<br/>CTranslate2]
-   Worker -- "4.4 Publish update messages to job_updates channel" --> Redis
+   Redis -- "4.1 Small models" --> WorkerSmall[Celery Worker Small<br/>audio_small queue<br/>concurrency=4]
+   Redis -- "4.1 Medium models" --> WorkerMedium[Celery Worker Medium<br/>audio_medium queue<br/>concurrency=2]
+   Redis -- "4.1 Large models" --> WorkerLarge[Celery Worker Large<br/>audio_large queue<br/>concurrency=1]
+
+   WorkerSmall -- "4.2 Download & transcribe" --> S3
+   WorkerMedium -- "4.2 Download & transcribe" --> S3
+   WorkerLarge -- "4.2 Download & transcribe" --> S3
+
+   WorkerSmall -- "4.3 Publish updates" --> Redis
+   WorkerMedium -- "4.3 Publish updates" --> Redis
+   WorkerLarge -- "4.3 Publish updates" --> Redis
 
    Client -- "5.1 Connect to WS" --> API
    API -- "5.2 Subscribe to job_updates pubsub channel" --> Redis
@@ -37,8 +44,11 @@ graph TB
 1. **File Upload**: Client uploads audio file via REST API
 2. **Job Creation**: API creates job record in PostgreSQL
 3. **Storage**: File uploaded to S3 with presigned URL
-4. **Queue Processing**: Job queued in Redis for Celery worker
-5. **Transcription**: Worker downloads file, processes with Whisper
+4. **Smart Queue Routing**: API routes job to appropriate queue based on model size
+   - Small models (tiny/base/small) → `audio_small` queue (high concurrency)
+   - Medium models → `audio_medium` queue (moderate concurrency)
+   - Large models (v2/v3) → `audio_large` queue (low concurrency)
+5. **Transcription**: Dedicated workers process tasks with optimal resource allocation
 6. **Real-time Updates**: Progress updates sent via Redis pub/sub to WebSocket
 7. **Completion**: Results stored in database, client notified
 
@@ -46,23 +56,24 @@ graph TB
 
 - **High Performance**: 75-80% faster transcription with faster-whisper (CTranslate2)
 - **Cost Efficient**: 60-70% reduction in compute costs with int8 quantization
+- **Multi-Queue System**: Smart task routing by model size for optimal resource usage
 - **Async Processing**: Non-blocking audio processing using Celery with advanced configuration
 - **S3 Storage**: Scalable file storage with S3-compatible services
 - **Real-time Updates**: WebSocket support for live progress updates with singleton pattern
 - **Job Management**: Track processing status and history
-- **Multiple Formats**: Support for MP3, WAV, M4A, FLAC, OGG, AAC
+- **Multiple Formats**: Support for MP3, WAV, M4A, FLAC, OGG, AAC, OPUS
 - **Advanced Features**: Word-level timestamps, language detection, VAD filtering
 - **Microservices Architecture**: Containerized services with Docker
 - **Database Migrations**: Alembic for schema management
 - **Resource Management**: Context managers with reference counting for safe cleanup
-- **Configuration Management**: Type-safe dataclass-based configuration system
+- **Configuration Management**: Separated API and Worker configs for minimal resource loading
 
 ## Project Structure
 
 ```
 audio_text_backend/
 ├── README.md                           # This documentation file
-├── config.ini                         # Application configuration
+├── config.ini                         # Unified application configuration
 ├── docker-compose.yml                 # Docker services orchestration
 ├── Dockerfile                         # Application container definition
 ├── pyproject.toml                     # Python project configuration
@@ -75,7 +86,7 @@ audio_text_backend/
 │   └── init.d/                        # PostgreSQL initialization scripts
 └── audio_text_backend/                # Main application package
     ├── __init__.py
-    ├── config.py                      # Configuration loader
+    ├── config.py                      # Unified configuration management
     ├── db.py                          # Database connection & management
     ├── debuger.py                     # Development server runner
     ├── errors.py                      # Custom exception classes
@@ -106,82 +117,120 @@ audio_text_backend/
 
 ## Configuration
 
-The application uses `config.ini` for configuration management:
+The application uses a unified `config.ini` file for all configuration management. Both API and Worker services load from the same configuration file, with all configuration values sourced from environment variables defined in `.env` file.
+
+### Middleware Configuration
+
+```ini
+[middleware]
+cors_origins = AUDIO_TEXT_CORS_ORIGINS_ENV
+rate_limit_per_minute = AUDIO_TEXT_RATE_LIMIT_PER_MINUTE_ENV
+rate_limit_per_hour = AUDIO_TEXT_RATE_LIMIT_PER_HOUR_ENV
+```
 
 ### Database Configuration
 
 ```ini
 [database]
-database = audiotext              # Database name
-host = postgres                   # Database hostname (Docker service)
-password = postgres               # Database password
-port = 5432                      # Database port
-user = postgres                  # Database username
-ref_table = transcription_job    # Reference table for migrations
+database = AUDIO_TEXT_DB_NAME_ENV
+host = AUDIO_TEXT_DB_HOST_ENV
+password = AUDIO_TEXT_DB_PASSWORD_ENV
+port = AUDIO_TEXT_DB_PORT_ENV
+user = AUDIO_TEXT_DB_USER_ENV
+ref_table = AUDIO_TEXT_DB_REF_TABLE_ENV
+```
+
+### Redis Configuration
+
+```ini
+[redis]
+host = AUDIO_TEXT_REDIS_HOST_ENV
+port = AUDIO_TEXT_REDIS_PORT_ENV
+pub_sub_channel = AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV
 ```
 
 ### AWS S3 Configuration
 
 ```ini
 [aws]
-bucket_name = bucket_name         # S3 bucket name
-access_key = YOUR_ACCESS_KEY      # AWS access key
-secret_key = YOUR_SECRET_KEY      # AWS secret key
-region = eu-west-3               # AWS region
+bucket_name = AUDIO_TEXT_AWS_BUCKET_NAME_ENV
+access_key = AUDIO_TEXT_AWS_ACCESS_KEY_ENV
+secret_key = AUDIO_TEXT_AWS_SECRET_KEY_ENV
+region = AUDIO_TEXT_AWS_REGION_ENV
 ```
 
-### Celery/Redis Configuration
-
-```ini
-[redis]
-host = redis                          # Redis hostname (Docker service)
-port = 6379                          # Redis port
-pub_sub_channel = job_updates        # Redis pub/sub channel for WebSocket updates
-
-[celery]
-queue_name = audio_processing        # Celery queue name
-routing_key = audio_processing       # Task routing key
-serialization_format = json          # Task serialization format
-timezone = UTC                       # Timezone for task scheduling
-enable_utc = 1                      # Enable UTC timestamps
-task_track_started = 1              # Track task start events
-task_acks_late = 1                  # Acknowledge tasks after completion
-worker_prefetch_multiplier = 1      # Tasks prefetched per worker process
-worker_disable_rate_limits = 1      # Disable rate limiting
-worker_max_tasks_per_child = 10     # Max tasks per worker before restart
-task_time_limit = 600               # Hard task time limit (10 min) - reduced with faster-whisper
-task_soft_time_limit = 480          # Soft task time limit (8 min) - reduced with faster-whisper
-task_default_retry_delay = 60       # Default retry delay (seconds)
-task_max_retries = 3                # Maximum retry attempts
-worker_autoscaler = celery.worker.autoscale:Autoscaler
-retry_policy_max_retries = 3        # Retry policy max attempts
-retry_policy_interval_start = 0     # Retry policy start interval
-retry_policy_interval_step = 60     # Retry policy step interval
-retry_policy_interval_max = 300     # Retry policy max interval
-```
-
-### File Processing Configuration
+### File Upload Configuration
 
 ```ini
 [file]
-max_size_mb = 10                             # Maximum file size in MB
-allowed_audio_extensions = mp3,wav,flac,mp4,m4a,aac,ogg
+max_size_mb = AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV
+allowed_audio_extensions = AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV
 ```
 
-### Whisper Model Configuration (faster-whisper)
+### Whisper Model Configuration
 
 ```ini
 [whisper]
-device = cpu                                 # Device: cpu or cuda
-compute_type = int8                          # Quantization: int8 (fast), float16 (GPU), float32
-cpu_threads = 4                              # CPU threads: 0=auto, or specific number
-beam_size = 5                                # Beam search: 1=fast, 5=balanced, 10=best
-word_timestamps = true                       # Enable word-level timestamps
-vad_filter = true                            # Enable Voice Activity Detection
-vad_min_silence_duration_ms = 500            # Minimum silence duration to remove (ms)
+device = AUDIO_TEXT_WHISPER_DEVICE_ENV
+compute_type = AUDIO_TEXT_WHISPER_COMPUTE_TYPE_ENV
+cpu_threads = AUDIO_TEXT_WHISPER_CPU_THREADS_ENV
+beam_size = AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV
+vad_filter = AUDIO_TEXT_WHISPER_VAD_FILTER_ENV
+vad_min_silence_duration_ms = AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV
 ```
 
-**Performance**: With int8 quantization on CPU, expect **75-80% faster** processing compared to openai-whisper.
+### Celery Worker Configuration
+
+```ini
+[celery]
+serialization_format = json
+timezone = UTC
+task_acks_late = true
+worker_prefetch_multiplier = 1
+worker_max_tasks_per_child = 1000
+task_soft_time_limit = 3600
+task_time_limit = 3900
+```
+
+### Queue Routing Configuration
+
+```ini
+[celery:queues:tiny]
+queue_name = AUDIO_TEXT_QUEUE_SMALL_ENV
+
+[celery:queues:base]
+queue_name = AUDIO_TEXT_QUEUE_SMALL_ENV
+
+[celery:queues:small]
+queue_name = AUDIO_TEXT_QUEUE_SMALL_ENV
+
+[celery:queues:medium]
+queue_name = AUDIO_TEXT_QUEUE_MEDIUM_ENV
+
+[celery:queues:large-v2]
+queue_name = AUDIO_TEXT_QUEUE_LARGE_ENV
+retry_policy_max_retries = AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV
+retry_policy_interval_start = AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV
+retry_policy_interval_step = AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV
+retry_policy_interval_max = AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV
+
+[celery:queues:large-v3]
+queue_name = AUDIO_TEXT_QUEUE_LARGE_ENV
+retry_policy_max_retries = AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_ENV
+retry_policy_interval_start = AUDIO_TEXT_QUEUE_LARGE_RETRY_START_ENV
+retry_policy_interval_step = AUDIO_TEXT_QUEUE_LARGE_RETRY_STEP_ENV
+retry_policy_interval_max = AUDIO_TEXT_QUEUE_LARGE_RETRY_MAX_INTERVAL_ENV
+
+[celery:queues:default]
+queue_name = AUDIO_TEXT_QUEUE_DEFAULT_ENV
+```
+
+**Queue Routing Strategy:**
+
+- **audio_small**: Tiny/base/small models (concurrency=4, max=10 instances)
+- **audio_medium**: Medium models (concurrency=2, max=5 instances)
+- **audio_large**: Large v2/v3 models (concurrency=1, max=3 instances)
+- **audio_processing**: Fallback for unknown models
 
 ## Quick Start
 
@@ -198,8 +247,8 @@ git clone <repository-url>
 cd audio_text_backend
 
 # Copy and configure environment
-cp config.ini.example config.ini
-# Edit config.ini with your AWS credentials and settings
+cp .env.template .env
+# Edit .env with your AWS credentials and settings
 ```
 
 ### 2. Docker Setup (Recommended)
@@ -207,8 +256,11 @@ cp config.ini.example config.ini
 #### Fast Development Start (Optimized)
 
 ```bash
-# Quick start with optimized build performance
+# Quick start with default single worker (listens to all queues)
 ./scripts/start-dev.sh
+
+# Or with multi-queue workers for testing (small/medium/large)
+./scripts/start-dev.sh --multi-queue
 ```
 
 This enables Docker BuildKit for faster builds and provides:
@@ -217,6 +269,7 @@ This enables Docker BuildKit for faster builds and provides:
 - ✅ **Parallel processing** with BuildKit
 - ✅ **Smart dependency management** (rebuilds only when needed)
 - ✅ **Optimized volume mounting** for development
+- ✅ **Multi-queue testing** option with `--multi-queue` flag
 
 #### Standard Docker Setup
 
@@ -347,13 +400,16 @@ The WebSocket implementation follows a clean separation of concerns:
 - **WebSocket Responsibilities**: Connection accept/close, error handling, lifecycle management
 - **Dependencies**: PostgreSQL, Redis
 
-### 2. Celery Worker (`action/tasks.py`)
+### 2. Celery Workers (`action/tasks.py`)
 
-- **Purpose**: Asynchronous audio processing with comprehensive configuration
-- **Queue**: `audio_processing` with advanced routing and retry policies
+- **Purpose**: Asynchronous audio processing with multi-queue optimization
+- **Queues**:
+  - `audio_small`: Tiny/base/small models (concurrency=4)
+  - `audio_medium`: Medium models (concurrency=2)
+  - `audio_large`: Large v2/v3 models (concurrency=1)
+  - `audio_processing`: Fallback queue
 - **Tasks**: Download from S3, Whisper transcription, cleanup
-- **Models**: Supports all Whisper models (tiny to large)
-- **Configuration**: Auto-scaling, time limits, retry mechanisms, task tracking
+- **Configuration**: Per-queue retry policies, optimized concurrency settings
 
 ### 3. PostgreSQL Database
 
@@ -380,14 +436,19 @@ The WebSocket implementation follows a clean separation of concerns:
 
 ### 6. Configuration Management (`config.py`)
 
-- **Purpose**: Centralized configuration using dataclasses
-- **Features**:
-  - Type-safe configuration loading
-  - Environment-specific settings
-  - Comprehensive Celery configuration
-  - Database, Redis, AWS, and file handling settings
+- **Purpose**: Unified configuration for both API and Worker services
+- **Structure**: Single `config.py` module with all dataclasses
+  - `Config`: Main config class containing all components
+  - `Middleware`: CORS and rate limiting settings
+  - `Database`: PostgreSQL connection details
+  - `Redis`: Broker, backend, and pub/sub configuration
+  - `AWS`: S3 storage settings
+  - `File`: Upload validation rules
+  - `Whisper`: Model execution settings
+  - `Celery`: Worker configuration and queue routing
+- **Benefits**: Simplified architecture, single source of truth, easier maintenance
 
-### 6. WebSocket Manager (`action/job.py`)
+### 7. WebSocket Manager (`action/job.py`)
 
 - **Purpose**: Real-time progress updates via Redis pub/sub
 - **Architecture**: Singleton pattern with async context manager
@@ -456,15 +517,16 @@ celery -A audio_text_backend.celery.app inspect active_queues
 # Visit http://localhost:5555
 ```
 
-### Enhanced Celery Features
+### Multi-Queue Celery Features
 
-The Celery configuration includes advanced features:
+The Celery configuration includes advanced multi-queue optimization:
 
-- **Auto-scaling**: Dynamic worker scaling based on queue size
-- **Task Time Limits**: Soft (25min) and hard (30min) limits prevent runaway tasks
-- **Retry Policies**: Exponential backoff with configurable intervals
+- **Smart Queue Routing**: Tasks automatically routed to appropriate queue by model size
+- **Optimized Concurrency**: Each queue has concurrency tuned for model resource needs
+- **Per-Queue Retry Policies**: Large models have more conservative retry settings
+- **Resource Isolation**: Small models don't block large models and vice versa
+- **Horizontal Scaling**: Each queue can scale independently (small: 0-10, medium: 0-5, large: 0-3)
 - **Prefetch Control**: Single task prefetch prevents memory issues
-- **Task Routing**: Dedicated `audio_processing` queue with custom routing
 - **Reliability**: Late acknowledgment and worker recycling prevent task loss
 
 ## Development
@@ -520,8 +582,12 @@ Deploy both services or individually with a simple script:
 
 **Default Configuration:**
 
-- API: 1GB RAM, 1 CPU, scales 0-10 instances, public access
-- Worker: 4GB RAM, 2 CPU, scales 1-5 instances, private access
+- **API**: 1GB RAM, 1 CPU, scales 0-10 instances, public access
+- **Workers**: 2GB RAM, 2 CPU per worker, private access
+  - Small models: min=1, max=10 instances
+  - Medium models: min=1, max=5 instances
+  - Large models: min=0, max=3 instances (on-demand)
+  - Fallback: min=1, max=5 instances
 
 ### CI/CD Deployment (Automated)
 
@@ -787,13 +853,18 @@ The application is designed for container orchestration with:
    # Check worker logs
    docker-compose logs celery-worker
 
+   # For multi-queue testing
+   docker-compose --profile multi-queue logs celery-worker-small
+   docker-compose --profile multi-queue logs celery-worker-medium
+   docker-compose --profile multi-queue logs celery-worker-large
+
    # Inspect worker configuration
    celery -A audio_text_backend.celery.app inspect conf
 
    # Check queue status
    celery -A audio_text_backend.celery.app inspect active_queues
 
-   # Restart worker
+   # Restart workers
    docker-compose restart celery-worker
    ```
 
