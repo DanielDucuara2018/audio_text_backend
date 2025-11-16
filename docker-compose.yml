@@ -11,9 +11,6 @@ services:
       context: ./
       dockerfile: ./Dockerfile
       target: dev
-      # Enable BuildKit cache features
-      cache_from:
-        - python:3.12-slim-bookworm
     networks:
       audio_text_bridge:
         ipv4_address: 169.254.9.2
@@ -79,6 +76,32 @@ services:
       retries: 3
       start_period: 5s
 
+  # Default single worker (listens to ALL queues - recommended for simple setups)
+  celery-worker:
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+      target: dev
+    networks:
+      audio_text_bridge:
+        ipv4_address: 169.254.9.5
+        aliases:
+          - "audio-text-backend.celery"
+    volumes:
+      - ./audio_text_backend:/app/audio_text_backend
+      - ./config.ini:/app/config.ini
+    env_file:
+      - .env
+    environment:
+      - C_FORCE_ROOT=true
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2
+    profiles: ["default"]
+
   # Dedicated worker for small models (dev multi-queue testing)
   celery-worker-small:
     build:
@@ -87,7 +110,7 @@ services:
       target: dev
     networks:
       audio_text_bridge:
-        ipv4_address: 169.254.9.5
+        ipv4_address: 169.254.9.6
         aliases:
           - "audio-text-backend.celery-small"
     volumes:
@@ -113,7 +136,7 @@ services:
       target: dev
     networks:
       audio_text_bridge:
-        ipv4_address: 169.254.9.6
+        ipv4_address: 169.254.9.7
         aliases:
           - "audio-text-backend.celery-medium"
     volumes:
@@ -137,11 +160,9 @@ services:
       context: ./
       dockerfile: ./Dockerfile
       target: dev
-      cache_from:
-        - python:3.12-slim-bookworm
     networks:
       audio_text_bridge:
-        ipv4_address: 169.254.9.7
+        ipv4_address: 169.254.9.8
         aliases:
           - "audio-text-backend.celery-large"
     volumes:

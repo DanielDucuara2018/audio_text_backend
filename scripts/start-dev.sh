@@ -31,9 +31,9 @@ if [ "$MULTI_QUEUE" = true ]; then
     docker-compose --profile multi-queue up -d --build
     WORKER_MODE="multi-queue (small/medium/large queues)"
 else
-    echo "🐳 Building with default worker (all queues)..."
-    docker-compose up -d --build
-    WORKER_MODE="single worker (all queues)"
+    echo "🐳 Building with default single worker (listens to all queues)..."
+    docker-compose --profile default up -d --build
+    WORKER_MODE="single worker (listens to all queues)"
 fi
 
 echo ""

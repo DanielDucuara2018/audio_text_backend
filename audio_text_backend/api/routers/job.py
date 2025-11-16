@@ -21,7 +21,7 @@ router = APIRouter(
 async def transcribe(request: TranscribeRequest):
     """Start audio transcription job."""
     try:
-        return add_job(request.filename, request.url, request.mode)
+        return await add_job(request.filename, request.url, request.mode)
     except DBError as e:
         logger.error(f"Database error creating transcription job: {e}")
         raise HTTPException(

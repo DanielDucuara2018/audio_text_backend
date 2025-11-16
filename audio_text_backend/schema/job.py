@@ -21,7 +21,6 @@ class TranscribeResponse(BaseModel):
     result_text: str | None = None
     processing_time_seconds: float | None = None
     error_message: str | None = None
-    # TODO New fields from faster-whisper
-    # language: str | None = None
-    # language_probability: float | None = None
-    # duration: float | None = None
+    language: str | None = None
+    language_probability: float | None = None
+    whisper_model: str | None = None

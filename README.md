@@ -253,13 +253,36 @@ cp .env.template .env
 
 ### 2. Docker Setup (Recommended)
 
+#### Worker Deployment Modes
+
+The application supports two Celery worker deployment modes:
+
+**1. Default Single Worker (Recommended for Development/Small Scale)**
+
+- Single worker listens to **ALL queues** (audio_small, audio_medium, audio_large, audio_processing)
+- Simpler setup with lower resource usage
+- Suitable for development and small-scale deployments
+- Concurrency: 2 workers
+
+**2. Multi-Queue Workers (Advanced Testing)**
+
+- **Three dedicated workers**, each optimized for specific model sizes:
+  - `celery-worker-small`: Handles tiny/base/small models (concurrency=4)
+  - `celery-worker-medium`: Handles medium models (concurrency=2)
+  - `celery-worker-large`: Handles large-v2/large-v3 models (concurrency=1)
+- Better resource isolation and performance testing
+- Higher resource usage (3 containers)
+- Mimics production scaling behavior
+
+**⚠️ Important:** You must run **ONE mode at a time** - either default or multi-queue, not both.
+
 #### Fast Development Start (Optimized)
 
 ```bash
-# Quick start with default single worker (listens to all queues)
+# Quick start with DEFAULT SINGLE WORKER (listens to all queues)
 ./scripts/start-dev.sh
 
-# Or with multi-queue workers for testing (small/medium/large)
+# Or with MULTI-QUEUE WORKERS for testing (small/medium/large)
 ./scripts/start-dev.sh --multi-queue
 ```
 
@@ -274,11 +297,17 @@ This enables Docker BuildKit for faster builds and provides:
 #### Standard Docker Setup
 
 ```bash
-# Start all services (traditional method)
-docker-compose up -d --build
+# Start with DEFAULT SINGLE WORKER
+docker-compose --profile default up -d --build
 
-# View logs
-docker-compose logs -f
+# OR start with MULTI-QUEUE WORKERS
+docker-compose --profile multi-queue up -d --build
+
+# View logs (default worker)
+docker-compose logs -f celery-worker
+
+# View logs (multi-queue workers)
+docker-compose --profile multi-queue logs -f celery-worker-small celery-worker-medium celery-worker-large
 
 # Check service status
 docker-compose ps
@@ -289,7 +318,7 @@ Both methods start:
 - **FastAPI app** on `localhost:3203`
 - **PostgreSQL** on `localhost:5432`
 - **Redis** on `localhost:6379`
-- **Celery worker** for background processing
+- **Celery worker(s)** for background processing (default or multi-queue)
 
 #### Build Performance Optimizations
 
@@ -546,16 +575,61 @@ pytest --cov=audio_text_backend
 
 ### Database Migrations
 
+The project includes a helper script that automatically loads environment variables and handles Alembic commands. This script works both inside the Docker container and on the host machine.
+
+**Inside Docker Container (Recommended):**
+
 ```bash
 # Create new migration
-alembic revision --autogenerate -m "description"
+docker exec audio_text_backend-app-1 bash -c "cd /app && ./scripts/alembic-revision.sh 'Add new field'"
+
+# Apply all pending migrations (upgrade to head)
+docker exec audio_text_backend-app-1 bash -c "cd /app && ./scripts/alembic-revision.sh upgrade"
+
+# Upgrade one revision forward
+docker exec audio_text_backend-app-1 bash -c "cd /app && ./scripts/alembic-revision.sh upgrade +1"
+
+# Downgrade one revision
+docker exec audio_text_backend-app-1 bash -c "cd /app && ./scripts/alembic-revision.sh downgrade -1"
+
+# Downgrade to base (removes all migrations)
+docker exec audio_text_backend-app-1 bash -c "cd /app && ./scripts/alembic-revision.sh downgrade base"
+```
+
+**On Host Machine (Local Development):**
+
+```bash
+# Create new migration
+./scripts/alembic-revision.sh "Add new field"
 
 # Apply migrations
-alembic upgrade head
+./scripts/alembic-revision.sh upgrade
 
-# View migration history
-alembic history
+# Downgrade one revision
+./scripts/alembic-revision.sh downgrade -1
 ```
+
+**Manual Alembic Commands (Alternative):**
+
+If you need to run Alembic commands manually, ensure environment variables are loaded:
+
+```bash
+# Inside container
+cd /app/alembic
+env $(cat /app/.env | grep -v '^#' | xargs) PYTHONPATH=/app alembic upgrade head
+
+# On host machine (with virtual environment activated)
+cd alembic
+alembic upgrade head
+```
+
+**Common Migration Workflow:**
+
+1. Modify your SQLAlchemy models in `audio_text_backend/model/`
+2. Create migration: `./scripts/alembic-revision.sh "Description of changes"`
+3. Review generated migration file in `alembic/versions/`
+4. Apply migration: `./scripts/alembic-revision.sh upgrade`
+5. Commit both model changes and migration file to git
 
 ## Deployment
 
@@ -850,13 +924,13 @@ The application is designed for container orchestration with:
 3. **Celery Worker Not Processing**
 
    ```bash
-   # Check worker logs
-   docker-compose logs celery-worker
+   # Check worker logs (DEFAULT single worker)
+   docker-compose --profile default logs -f celery-worker
 
-   # For multi-queue testing
-   docker-compose --profile multi-queue logs celery-worker-small
-   docker-compose --profile multi-queue logs celery-worker-medium
-   docker-compose --profile multi-queue logs celery-worker-large
+   # OR check worker logs (MULTI-QUEUE workers)
+   docker-compose --profile multi-queue logs -f celery-worker-small
+   docker-compose --profile multi-queue logs -f celery-worker-medium
+   docker-compose --profile multi-queue logs -f celery-worker-large
 
    # Inspect worker configuration
    celery -A audio_text_backend.celery.app inspect conf
@@ -864,8 +938,11 @@ The application is designed for container orchestration with:
    # Check queue status
    celery -A audio_text_backend.celery.app inspect active_queues
 
-   # Restart workers
-   docker-compose restart celery-worker
+   # Restart workers (default)
+   docker-compose --profile default restart celery-worker
+
+   # OR restart workers (multi-queue)
+   docker-compose --profile multi-queue restart celery-worker-small celery-worker-medium celery-worker-large
    ```
 
 4. **WebSocket Connection Issues**

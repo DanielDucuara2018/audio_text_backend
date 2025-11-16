@@ -15,30 +15,37 @@ from audio_text_backend.utils import idun
 logger = logging.getLogger(__name__)
 
 
-def create(filename: str, url: str, mode: str) -> TranscriptionJob:
+async def create(filename: str, url: str, model: str) -> TranscriptionJob:
     """Start audio transcription job.
 
     Args:
         filename: Name of the audio file to transcribe
         url: URL/path to the audio file
-        mode: Whisper model to use (tiny, base, small, medium, large-v2, large-v3)
+        model: Whisper model to use (tiny, base, small, medium, large-v2, large-v3)
 
     Returns:
         TranscriptionJob instance with job details
 
     """
     # Create job record in database
-    job = TranscriptionJob(filename=filename, url=url, status=JobStatus.PENDING).create()
+    job = TranscriptionJob(
+        filename=filename, url=url, status=JobStatus.PENDING, whisper_model=model
+    ).create()
+
+    async with JobUpdateManager() as manager:
+        # Add job to Redis-backed tracking (shared across all Cloud Run instances)
+        await manager._add_job_to_redis(job.id)
+        await manager._start_listening()
 
     # Get queue configuration for the selected model
-    queue_config = Config.celery.queues.get(mode, Config.celery.queues.get("default"))
+    queue_config = Config.celery.queues.get(model, Config.celery.queues.get("default"))
     queue_name = queue_config.queue_name
 
-    logger.info(f"Job {job.id}: Routing to queue '{queue_name}' for model '{mode}'")
+    logger.info(f"Job {job.id}: Routing to queue '{queue_name}' for model '{model}'")
 
     # Start background processing with Celery using dynamic queue routing
     task = process_audio.apply_async(
-        args=[job.id, job.filename, mode],
+        args=[job.id, job.filename, model],
         queue=queue_name,
         retry=True,
         retry_policy={
@@ -69,6 +76,9 @@ def read(job_id: str | None = None, **kwargs) -> TranscriptionJob | list[Transcr
 class JobUpdateManager:
     _instance = None
 
+    # Redis keys for distributed state (shared across all Cloud Run instances)
+    REDIS_ACTIVE_JOBS_KEY = "audio_text:active_jobs"  # Set of job IDs being tracked
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
@@ -82,28 +92,51 @@ class JobUpdateManager:
             self.pubsub = None
             self._listener_task = None
             self._context_count = 0
+            self._active_job_ids: set[str] = set()
+            self._job_lock = asyncio.Lock()
+            self._listener_lock = asyncio.Lock()
+            self._context_lock = asyncio.Lock()
+            self._connection_lock = asyncio.Lock()
 
     async def __aenter__(self):
         """Async context manager entry - ensure Redis client is ready."""
         await self._get_redis_client()
-        self._context_count += 1
-        logger.info(f"JobUpdateManager context entered (active contexts: {self._context_count})")
+        async with self._context_lock:
+            self._context_count += 1
+            logger.info(
+                f"JobUpdateManager context entered (active contexts: {self._context_count})"
+            )
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit - clean up resources only when last context exits."""
-        self._context_count = max(0, self._context_count - 1)
-        logger.info(f"JobUpdateManager context exiting (remaining contexts: {self._context_count})")
+        async with self._context_lock:
+            self._context_count = max(0, self._context_count - 1)
+            logger.info(
+                f"JobUpdateManager context exiting (remaining contexts: {self._context_count})"
+            )
+            context_count = self._context_count
 
-        if self._context_count == 0:
-            logger.info("Last context exiting - cleaning up all resources")
-            await self._close_all_websockets()
-            await self.stop_listening()
-            await self._cleanup_redis_resources()
-            logger.info("All resources cleaned up successfully")
+        if context_count == 0:
+            # Check if there are still pending/processing jobs that need listening
+            pending_jobs = await self._get_pending_jobs()
+
+            if pending_jobs:
+                logger.info(
+                    f"Last context exiting but {len(pending_jobs)} jobs still pending/processing - "
+                    f"keeping listener alive: {pending_jobs}"
+                )
+                await self._close_all_websockets()
+                # Don't stop listener or cleanup Redis - jobs still need updates
+            else:
+                logger.info("Last context exiting with no pending jobs - cleaning up all resources")
+                await self._close_all_websockets()
+                await self.stop_listening()
+                await self._cleanup_redis_resources()
+                logger.info("All resources cleaned up successfully")
         else:
             logger.info(
-                f"Context exited but {self._context_count} contexts still active - keeping resources"
+                f"Context exited but {context_count} contexts still active - keeping resources"
             )
 
         return False  # Don't suppress exceptions
@@ -111,44 +144,45 @@ class JobUpdateManager:
     async def _get_redis_client(self):
         """Get or create async Redis client."""
         if not self.redis_client:
-            self.redis_client = await aioredis.from_url(
-                f"redis://{Config.redis.host}:{Config.redis.port}/0"
-            )
-            self.pubsub = self.redis_client.pubsub()
+            async with self._listener_lock:
+                if not self.redis_client:
+                    self.redis_client = await aioredis.from_url(
+                        f"redis://{Config.redis.host}:{Config.redis.port}/0"
+                    )
+                    self.pubsub = self.redis_client.pubsub()
         return self.redis_client
 
     async def connect(self, websocket: WebSocket, job_id: str):
         """Connect WebSocket and start Redis listener if needed."""
         await websocket.accept()
-        self._add_connection(websocket, job_id)
+        await self._add_connection(websocket, job_id)
+        await self._start_listening()
 
-        # Start listening only if not already started
-        if not self._listener_task or self._listener_task.done():
-            await self._start_listening()
-
-    def _add_connection(self, websocket: WebSocket, job_id: str):
+    async def _add_connection(self, websocket: WebSocket, job_id: str):
         """Add a new WebSocket connection."""
-        # Handle existing connection for same job_id
-        if job_id in self.job_connections:
-            logger.warning(f"Replacing existing connection for job {job_id}")
-            old_websocket = self.job_connections[job_id]
-            self.remove_connection(old_websocket, job_id, delete_job=False)
+        async with self._connection_lock:
+            # Handle existing connection for same job_id
+            if job_id in self.job_connections:
+                logger.warning(f"Replacing existing connection for job {job_id}")
+                old_websocket = self.job_connections[job_id]
+                self._remove_connection_unsafe(old_websocket, job_id, delete_job=False)
 
-        self.active_connections.append(websocket)
-        self.job_connections[job_id] = websocket
-        logger.debug(
-            f"Added WebSocket connection for job {job_id}. Total connections: {len(self.active_connections)}"
-        )
+            self.active_connections.append(websocket)
+            self.job_connections[job_id] = websocket
+            logger.debug(
+                f"Added WebSocket connection for job {job_id}. Total connections: {len(self.active_connections)}"
+            )
 
     async def _start_listening(self):
         """Start listening for Redis messages."""
-        if self._listener_task and not self._listener_task.done():
-            logger.debug("Redis listener already running")
-            return
+        async with self._listener_lock:
+            if self._listener_task and not self._listener_task.done():
+                logger.debug("Redis listener already running")
+                return
 
-        await self._subscribe_redis_channel()
-        self._listener_task = asyncio.create_task(self._listen_for_updates())
-        logger.info("Started Redis listener for WebSocket updates")
+            await self._subscribe_redis_channel()
+            self._listener_task = asyncio.create_task(self._listen_for_updates())
+            logger.info("Started Redis listener for WebSocket updates")
 
     async def _subscribe_redis_channel(self):
         """Initialize Redis client and pubsub subscription."""
@@ -198,11 +232,11 @@ class JobUpdateManager:
 
             logger.debug(f"Received Redis message for job {job_id}: {data}")
 
-            if job_id and job_id in self.job_connections:
+            await self._update_db_job_status(job_id, data)
+            if job_id in self.job_connections:
                 await self._send_websocket_update(job_id, data)
-                self._update_db_job_status(job_id, data)
             else:
-                logger.debug(f"No WebSocket connection found for job: {job_id}")
+                logger.debug(f"No WebSocket connection for job {job_id}, DB updated only")
 
         except json.JSONDecodeError as e:
             logger.error(f"Failed to decode Redis message: {e}")
@@ -215,25 +249,38 @@ class JobUpdateManager:
         try:
             await websocket.send_json(data)
             logger.info(f"Sent WebSocket update for job {job_id}: {data.get('message', '')}")
+
+            # Close WebSocket if job reached terminal state
+            status = data.get("status")
+            if status in ["completed", "failed"]:
+                logger.info(f"Job {job_id} reached terminal state '{status}' - closing WebSocket")
+                await websocket.close(code=1000, reason=f"Job {status}")
+                await self.remove_connection(websocket, job_id)
         except Exception as ws_error:
             logger.warning(f"WebSocket send failed for job {job_id}: {ws_error}")
             # Only remove from tracking - let FastAPI handle the connection closure
-            self.remove_connection(websocket, job_id)
+            await self.remove_connection(websocket, job_id)
 
-    def _update_db_job_status(self, job_id: str, data: dict[str, Any]):
+    async def _update_db_job_status(self, job_id: str, data: dict[str, Any]):
         """Update the job status in the database."""
         status = data["status"]
         try:
             job = TranscriptionJob.get(id=job_id)
             job = job.update(
                 status=status,
-                result_text=data.get("text"),
+                result_text=data.get("result"),
                 processing_time_seconds=data.get("processing_time"),
                 error=f"{data.get('message')} {data.get('error')}" if status == "failed" else None,
-            )  # TODO Update other fields as needed
+                language=data.get("language"),
+                language_probability=data.get("language_probability"),
+            )
             logger.info(f"Updated job {job_id} status to {job.status}")
+
+            # Remove from active tracking if job reached terminal state
+            if status in ["completed", "failed"]:
+                await self._remove_from_active_jobs(job_id, status)
         except Exception as e:
-            logger.error(f"Failed to update job {job_id} status to {job.status}: {e}")
+            logger.error(f"Failed to update job {job_id} status to {status}: {e}")
 
     async def disconnect(self, websocket: WebSocket, job_id: str):
         """Disconnect and remove a WebSocket connection from tracking.
@@ -241,17 +288,57 @@ class JobUpdateManager:
         Note: WebSocket closure is handled by the FastAPI router layer.
         This method only removes the connection from internal tracking.
         """
-        self.remove_connection(websocket, job_id)
+        await self.remove_connection(websocket, job_id)
         logger.debug(
             f"Removed WebSocket tracking for job {job_id}. Remaining connections: {len(self.active_connections)}"
         )
 
-    def remove_connection(self, websocket: WebSocket, job_id: str, *, delete_job: bool = True):
-        """Remove a WebSocket connection."""
+    async def _remove_from_active_jobs(self, job_id: str, status: str):
+        """Thread-safe removal of job from active tracking."""
+        async with self._job_lock:
+            self._active_job_ids.discard(job_id)
+            logger.debug(f"Removed job {job_id} from active tracking (status: {status})")
+
+        # Also remove from Redis (shared state across all instances)
+        await self._remove_job_from_redis(job_id)
+
+    async def _add_job_to_redis(self, job_id: str):
+        """Add job to Redis-backed tracking (distributed across Cloud Run instances)."""
+        try:
+            await self.redis_client.sadd(self.REDIS_ACTIVE_JOBS_KEY, job_id)
+            # Also add to local cache
+            async with self._job_lock:
+                self._active_job_ids.add(job_id)
+            logger.info(f"Added job {job_id} to distributed tracking (Redis + local cache)")
+        except Exception as e:
+            logger.error(f"Failed to add job {job_id} to Redis tracking: {e}")
+            # Fallback: at least add to local cache
+            async with self._job_lock:
+                self._active_job_ids.add(job_id)
+
+    async def _remove_job_from_redis(self, job_id: str):
+        """Remove job from Redis-backed tracking (distributed)."""
+        try:
+            await self.redis_client.srem(self.REDIS_ACTIVE_JOBS_KEY, job_id)
+            logger.debug(f"Removed job {job_id} from distributed tracking (Redis)")
+        except Exception as e:
+            logger.warning(f"Failed to remove job {job_id} from Redis tracking: {e}")
+
+    def _remove_connection_unsafe(
+        self, websocket: WebSocket, job_id: str, *, delete_job: bool = True
+    ):
+        """Remove a WebSocket connection (internal, no lock - caller must hold lock)."""
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
         if delete_job and job_id in self.job_connections:
             del self.job_connections[job_id]
+
+    async def remove_connection(
+        self, websocket: WebSocket, job_id: str, *, delete_job: bool = True
+    ):
+        """Remove a WebSocket connection (thread-safe)."""
+        async with self._connection_lock:
+            self._remove_connection_unsafe(websocket, job_id, delete_job=delete_job)
 
     async def _close_all_websockets(self):
         """Clear all WebSocket connection tracking during shutdown.
@@ -259,17 +346,18 @@ class JobUpdateManager:
         Note: This only clears internal tracking. Individual WebSocket connections
         are managed by their respective FastAPI router contexts.
         """
-        if not self.active_connections:
-            return
+        async with self._connection_lock:
+            if not self.active_connections:
+                return
 
-        logger.info(
-            f"Clearing tracking for {len(self.active_connections)} WebSocket connections during shutdown"
-        )
+            logger.info(
+                f"Clearing tracking for {len(self.active_connections)} WebSocket connections during shutdown"
+            )
 
-        # Clear all connection tracking
-        self.active_connections.clear()
-        self.job_connections.clear()
-        logger.info("All WebSocket connection tracking cleared")
+            # Clear all connection tracking
+            self.active_connections.clear()
+            self.job_connections.clear()
+            logger.info("All WebSocket connection tracking cleared")
 
     async def stop_listening(self):
         """Stop the Redis listener."""
@@ -300,6 +388,42 @@ class JobUpdateManager:
             except Exception as e:
                 logger.error(f"Error closing Redis client: {e}")
 
+    async def _get_pending_jobs(self) -> set[str]:
+        """Get set of job IDs that are pending or processing.
+
+        Returns:
+            Set of job IDs that still need Redis listener updates (from Redis + DB)
+
+        """
+        try:
+            # Query database for jobs in pending or processing state
+            pending_jobs = TranscriptionJob.find(status=[JobStatus.PENDING, JobStatus.PROCESSING])
+            job_ids_db = {job.id for job in pending_jobs}
+
+            # Get jobs from Redis (shared across all Cloud Run instances)
+            job_ids_redis = await self.redis_client.smembers(self.REDIS_ACTIVE_JOBS_KEY)
+            job_ids_redis = {
+                job_id.decode() if isinstance(job_id, bytes) else job_id for job_id in job_ids_redis
+            }
+
+            # Also include jobs from local cache
+            async with self._job_lock:
+                job_ids_local = self._active_job_ids.copy()
+
+            # Union of all sources (most comprehensive view)
+            all_job_ids = job_ids_db | job_ids_redis | job_ids_local
+
+            logger.debug(
+                f"Found {len(all_job_ids)} pending/processing jobs "
+                f"(DB: {len(job_ids_db)}, Redis: {len(job_ids_redis)}, Local: {len(job_ids_local)})"
+            )
+            return all_job_ids
+        except Exception as e:
+            logger.error(f"Error querying pending jobs: {e}")
+            # Fallback to local cache only if distributed state fails
+            async with self._job_lock:
+                return self._active_job_ids.copy()
+
 
 async def establish_connection(job_id: str, websocket: WebSocket):
     """Establish WebSocket connection for job updates using context manager.
@@ -325,7 +449,7 @@ async def establish_connection(job_id: str, websocket: WebSocket):
             await _handle_websocket_error(websocket, job_id, e)
         finally:
             # Only remove from tracking - FastAPI router handles connection closure
-            manager.remove_connection(websocket, job_id)
+            await manager.remove_connection(websocket, job_id)
             logger.info(
                 f"[{connection_id}] WebSocket connection tracking cleanup completed for job: {job_id}"
             )
@@ -378,7 +502,7 @@ async def _handle_websocket_lifecycle(
                 break
         except WebSocketDisconnect:
             logger.info(f"[{connection_id}] Client disconnected for job: {job_id}")
-            manager.remove_connection(websocket, job_id)
+            await manager.remove_connection(websocket, job_id)
             break
         except Exception as e:
             consecutive_ping_failures = await _handle_error_with_message(
@@ -440,7 +564,7 @@ async def _handle_error_with_message(
 
     if consecutive_ping_failures >= max_ping_failures:
         logger.info(f"[{connection_id}] Connection dead for job {job_id} - closing")
-        manager.remove_connection(websocket, job_id)
+        await manager.remove_connection(websocket, job_id)
     else:
         # Small delay to prevent tight loop on repeated errors
         await asyncio.sleep(0.1)
