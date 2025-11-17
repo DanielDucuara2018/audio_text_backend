@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 
-initialize(True)
+initialize(Config.database.alembic_migration)
 
 app = FastAPI(title="Audio Text Backend", version="0.1.0")
 

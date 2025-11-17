@@ -20,6 +20,9 @@ TAG="latest"
 TERRAFORM_DIR="../audio_text_infrastructure"
 AUTO_FETCH_CONFIG=true
 
+# DB alembic migration
+DB_MIGRATION="false"
+
 # Application configuration (matching ci/deployment.yaml defaults)
 MAX_FILE_SIZE="${AUDIO_TEXT_MAX_FILE_SIZE_MB_ENV:-100}"
 ALLOWED_EXTENSIONS="${AUDIO_TEXT_ALLOWED_AUDIO_EXTENSIONS_ENV:-mp3,wav,flac,mp4,m4a,aac,ogg,opus}"
@@ -201,12 +204,13 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --max-instances ${API_MAX_INSTANCES} \
         --allow-unauthenticated \
         --port 3203 \
+        --timeout=600 \
         --vpc-connector ${VPC_CONNECTOR} \
         --vpc-egress private-ranges-only \
         --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
         --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
         --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
-        --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
+        --set-env-vars "AUDIO_TEXT_DB_MIGRATION_ENV=${DB_MIGRATION}" \
         --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
         --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
         --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
@@ -233,7 +237,7 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 
     echo "✅ API service deployed successfully"
 fi
@@ -271,9 +275,9 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
         --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
         --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
-        --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
         --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
         --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_DB_MIGRATION_ENV=${DB_MIGRATION}" \
         --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
@@ -298,7 +302,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 
     echo "✅ Small model worker deployed successfully"
 
@@ -323,9 +327,9 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
         --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
         --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
-        --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
         --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
         --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_DB_MIGRATION_ENV=${DB_MIGRATION}" \
         --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
@@ -350,7 +354,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 
     echo "✅ Medium model worker deployed successfully"
 
@@ -375,9 +379,9 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_DB_HOST_ENV=${DB_HOST}" \
         --set-env-vars "AUDIO_TEXT_DB_NAME_ENV=${DB_NAME}" \
         --set-env-vars "AUDIO_TEXT_DB_USER_ENV=${DB_USER}" \
-        --set-env-vars "AUDIO_TEXT_DB_PASSWORD_ENV=${DB_PASSWORD}" \
         --set-env-vars "AUDIO_TEXT_DB_PORT_ENV=5432" \
         --set-env-vars "AUDIO_TEXT_DB_REF_TABLE_ENV=${DB_REF_TABLE}" \
+        --set-env-vars "AUDIO_TEXT_DB_MIGRATION_ENV=${DB_MIGRATION}" \
         --set-env-vars "AUDIO_TEXT_REDIS_HOST_ENV=${REDIS_HOST}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PORT_ENV=${REDIS_PORT}" \
         --set-env-vars "AUDIO_TEXT_REDIS_PUB_SUB_CHANNEL_ENV=${REDIS_CHANNEL}" \
@@ -402,7 +406,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
 
     echo "✅ Large model worker deployed successfully"
 fi

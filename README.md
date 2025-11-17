@@ -633,6 +633,21 @@ alembic upgrade head
 
 ## Deployment
 
+### Database Migrations on Cloud Run
+
+**The API automatically runs database migrations on startup** using a startup script (`scripts/start-api.sh`) that:
+
+1. Runs migrations **once** before starting uvicorn workers (prevents multi-worker conflicts)
+2. Starts the API server with multiple workers after migrations complete
+3. Ensures database schema is always up-to-date with the deployed code
+
+**Why this approach?**
+
+- ✅ Automatic migrations on each deployment (no manual steps)
+- ✅ Prevents multi-worker race conditions (migrations run before workers start)
+- ✅ Fast startup time (<30 seconds typical, <4 minutes Cloud Run limit)
+- ✅ Idempotent - safe to run multiple times
+
 ### Google Cloud Platform (Manual Deployment)
 
 Deploy both services or individually with a simple script:
@@ -651,7 +666,7 @@ Deploy both services or individually with a simple script:
 **Options:**
 
 - `-p, --project`: GCP project ID (required)
-- `-r, --region`: GCP region (default: us-central1)
+- `-r, --region`: GCP region (default: europe-west4)
 - `-s, --service`: Deploy `api`, `worker`, or `all` (default: all)
 
 **Default Configuration:**

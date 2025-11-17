@@ -64,6 +64,10 @@ FROM dependencies AS api
 COPY audio_text_backend/ ./audio_text_backend/
 COPY alembic/ ./alembic/
 COPY config.ini ./
+COPY scripts/start-api.sh ./scripts/
+
+# Make startup script executable
+RUN chmod +x ./scripts/start-api.sh
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && \
@@ -73,8 +77,8 @@ USER appuser
 
 EXPOSE 3203
 
-# Production API server (no reload)
-CMD ["uvicorn", "audio_text_backend.api.api:app", "--host", "0.0.0.0", "--port", "3203", "--workers", "4"]
+# Production API server with automatic migrations
+CMD ["./scripts/start-api.sh"]
 
 # ============================================================================
 # WORKER PRODUCTION STAGE - Celery worker with faster-whisper
