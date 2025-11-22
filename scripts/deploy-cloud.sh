@@ -52,6 +52,10 @@ WHISPER_BEAM_SIZE="${AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV:-5}"
 WHISPER_VAD_FILTER="${AUDIO_TEXT_WHISPER_VAD_FILTER_ENV:-true}"
 WHISPER_VAD_MIN_SILENCE_MS="${AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV:-500}"
 
+# Email configuration (SendGrid)
+EMAIL_FROM="${AUDIO_TEXT_EMAIL_FROM_ENV:-noreply@voiceia.danobhub.com}"
+EMAIL_FROM_NAME="${AUDIO_TEXT_EMAIL_FROM_NAME_ENV:-VoiceIA}"
+
 # Infrastructure variables (will be fetched from Terraform)
 DB_HOST=""
 DB_NAME=""
@@ -237,7 +241,9 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_ENV=${EMAIL_FROM}" \
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_NAME_ENV=${EMAIL_FROM_NAME}" \
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest,AUDIO_TEXT_SENDGRID_API_KEY_ENV=audio-text-sendgrid-api-key:latest"
 
     echo "✅ API service deployed successfully"
 fi
@@ -302,7 +308,9 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_ENV=${EMAIL_FROM}" \
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_NAME_ENV=${EMAIL_FROM_NAME}" \
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest,AUDIO_TEXT_SENDGRID_API_KEY_ENV=audio-text-sendgrid-api-key:latest"
 
     echo "✅ Small model worker deployed successfully"
 
@@ -354,7 +362,9 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_ENV=${EMAIL_FROM}" \
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_NAME_ENV=${EMAIL_FROM_NAME}" \
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest,AUDIO_TEXT_SENDGRID_API_KEY_ENV=audio-text-sendgrid-api-key:latest"
 
     echo "✅ Medium model worker deployed successfully"
 
@@ -406,7 +416,9 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --set-env-vars "AUDIO_TEXT_WHISPER_BEAM_SIZE_ENV=${WHISPER_BEAM_SIZE}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_FILTER_ENV=${WHISPER_VAD_FILTER}" \
         --set-env-vars "AUDIO_TEXT_WHISPER_VAD_MIN_SILENCE_MS_ENV=${WHISPER_VAD_MIN_SILENCE_MS}" \
-        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest"
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_ENV=${EMAIL_FROM}" \
+        --set-env-vars "AUDIO_TEXT_EMAIL_FROM_NAME_ENV=${EMAIL_FROM_NAME}" \
+        --update-secrets "AUDIO_TEXT_DB_PASSWORD_ENV=audio-text-db-password:latest,AUDIO_TEXT_AWS_ACCESS_KEY_ENV=audio-text-aws-access-key:latest,AUDIO_TEXT_AWS_SECRET_KEY_ENV=audio-text-aws-secret-key:latest,AUDIO_TEXT_SENDGRID_API_KEY_ENV=audio-text-sendgrid-api-key:latest"
 
     echo "✅ Large model worker deployed successfully"
 fi
@@ -423,7 +435,6 @@ echo "Worker Services:"
 echo "  - Small models (tiny/base/small): audio-worker-small (min=1, max=10, concurrency=4)"
 echo "  - Medium models: audio-worker-medium (min=1, max=5, concurrency=2)"
 echo "  - Large models (v2/v3): audio-worker-large (min=0, max=3, concurrency=1)"
-echo "  - Fallback (legacy): audio-worker (${QUEUE_DEFAULT} queue)"
 echo ""
 echo "Queue Routing:"
 echo "  - tiny/base/small → ${QUEUE_SMALL} queue"

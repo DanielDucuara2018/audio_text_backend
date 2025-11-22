@@ -33,4 +33,5 @@ celery_app.conf.update(
     # Task routing removed - queue is specified at task submission time via apply_async(queue=...)
     # This allows dynamic queue selection based on Whisper model size
     # Retry policy is configured per-task in apply_async() call
+    broker_connection_retry_on_startup=True,
 )

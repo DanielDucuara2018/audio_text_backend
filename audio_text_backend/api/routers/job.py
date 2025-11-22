@@ -2,11 +2,18 @@ import logging
 
 from fastapi import APIRouter, HTTPException, WebSocket
 
+from audio_text_backend.action.email import get_email_service
 from audio_text_backend.action.job import create as add_job
 from audio_text_backend.action.job import establish_connection
 from audio_text_backend.action.job import read as read_jobs
 from audio_text_backend.errors import DBError, NoDataFound
-from audio_text_backend.schema.job import TranscribeRequest, TranscribeResponse
+from audio_text_backend.model.transcription_job import JobStatus
+from audio_text_backend.schema.job import (
+    EmailTranscriptionRequest,
+    EmailTranscriptionResponse,
+    TranscribeRequest,
+    TranscribeResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +70,53 @@ async def read() -> list[TranscribeResponse]:
     except Exception as e:
         logger.error(f"Unexpected error retrieving jobs: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving jobs: {str(e)}")
+
+
+@router.post("/{job_id}/email", response_model=EmailTranscriptionResponse)
+async def email_transcription(job_id: str, request: EmailTranscriptionRequest):
+    """Send transcription results via email."""
+    try:
+        # Validate email is provided
+        if not request.email:
+            raise HTTPException(status_code=400, detail="Email address is required")
+
+        # Get job from database
+        job = read_jobs(job_id)
+
+        # Validate job is completed
+        if job.status != JobStatus.COMPLETED:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot email transcription. Job status is '{job.status}', expected 'completed'",
+            )
+
+        # Validate job has results
+        if not job.result_text:
+            raise HTTPException(
+                status_code=400, detail="Cannot email transcription. Job has no results"
+            )
+
+        # Send email
+        email_service = get_email_service()
+        success = email_service.send_transcription(job, request.email)
+
+        if success:
+            return EmailTranscriptionResponse(
+                success=True, message=f"Transcription sent successfully to {request.email}"
+            )
+        else:
+            raise HTTPException(
+                status_code=500, detail="Failed to send email. Please try again later"
+            )
+
+    except NoDataFound:
+        logger.warning(f"Job not found for email: {job_id}")
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error sending email for job {job_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
 
 
 @router.websocket("/ws/{job_id}")

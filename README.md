@@ -650,7 +650,32 @@ alembic upgrade head
 
 ### Google Cloud Platform (Manual Deployment)
 
-Deploy both services or individually with a simple script:
+**Prerequisites: Set up secrets in Google Secret Manager**
+
+Before deploying, you need to store sensitive credentials in Secret Manager:
+
+```bash
+# Set your GCP project ID
+export PROJECT_ID="your-project-id"
+gcloud config set project ${PROJECT_ID}
+
+# Create secrets (run these commands once)
+echo -n "your-database-password" | gcloud secrets create audio-text-db-password --data-file=-
+echo -n "your-aws-access-key" | gcloud secrets create audio-text-aws-access-key --data-file=-
+echo -n "your-aws-secret-key" | gcloud secrets create audio-text-aws-secret-key --data-file=-
+echo -n "your-sendgrid-api-key" | gcloud secrets create audio-text-sendgrid-api-key --data-file=-
+
+# Update existing secrets (if values change)
+echo -n "new-value" | gcloud secrets versions add audio-text-sendgrid-api-key --data-file=-
+
+# List all secrets
+gcloud secrets list
+
+# View secret versions
+gcloud secrets versions list audio-text-sendgrid-api-key
+```
+
+**Deploy both services or individually with a simple script:**
 
 ```bash
 # Deploy both API and Worker services

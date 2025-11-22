@@ -87,6 +87,16 @@ class Whisper:
 
 
 @dataclass
+class Email:
+    """Email sender configuration."""
+
+    from_address: str
+    from_name: str
+    sendgrid_api_key: str
+    enabled: bool = True
+
+
+@dataclass
 class Celery:
     """Celery configuration."""
 
@@ -118,6 +128,7 @@ class Config:
     aws: AWS
     file: File
     whisper: Whisper
+    email: Email
 
 
 def bootstrap_configuration(path: str | Path = ROOT.joinpath("config.ini")) -> None:

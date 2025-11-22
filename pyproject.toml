@@ -25,6 +25,7 @@ dependencies = [
   "uvicorn[standard]==0.35.0",
   "apischema==0.19.0",
   "python-magic==0.4.27",
+  "pydantic[email]==2.12.4",
   # Storage and async processing
   "boto3==1.34.0",
   "celery[redis]==5.3.0",
@@ -32,6 +33,8 @@ dependencies = [
   "sqlalchemy==2.0.0",
   "alembic==1.13.0",
   "psycopg2-binary==2.9.9",
+  # Email
+  "sendgrid==6.11.0",
   # Additional utilities
   "python-multipart==0.0.20",
   # "pydantic-settings==2.1.0",
