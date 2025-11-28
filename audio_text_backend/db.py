@@ -16,7 +16,7 @@ from alembic.script import ScriptDirectory
 from audio_text_backend.config import Config, Database
 from audio_text_backend.errors import DBError
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[1].resolve()
 ALEMBIC_PATH = ROOT.joinpath("alembic")
 
 logger = logging.getLogger(__name__)

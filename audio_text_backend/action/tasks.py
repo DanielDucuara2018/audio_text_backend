@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Add Redis client for publishing
 redis_client = redis.Redis.from_url(f"redis://{Config.redis.host}:{Config.redis.port}/0")
 
-BASE_DIR = Path(__file__).parent
+BASE_DIR = Path(__file__).parent.resolve()
 TMP_FOLDER = BASE_DIR.joinpath("tmp")
 
 # Create input folder if it doesn't exist

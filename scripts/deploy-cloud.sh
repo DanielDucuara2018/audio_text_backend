@@ -207,6 +207,7 @@ if [[ "$SERVICE" == "api" || "$SERVICE" == "all" ]]; then
         --min-instances ${API_MIN_INSTANCES} \
         --max-instances ${API_MAX_INSTANCES} \
         --allow-unauthenticated \
+        --ingress internal-and-cloud-load-balancing \
         --port 3203 \
         --timeout=600 \
         --vpc-connector ${VPC_CONNECTOR} \
@@ -272,6 +273,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --min-instances ${WORKER_MIN_INSTANCES} \
         --max-instances ${WORKER_MAX_INSTANCES} \
         --no-allow-unauthenticated \
+        --ingress internal \
         --no-cpu-throttling \
         --port 8080 \
         --vpc-connector ${VPC_CONNECTOR} \
@@ -326,6 +328,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --min-instances ${WORKER_MIN_INSTANCES} \
         --max-instances 5 \
         --no-allow-unauthenticated \
+        --ingress internal \
         --no-cpu-throttling \
         --port 8080 \
         --vpc-connector ${VPC_CONNECTOR} \
@@ -380,6 +383,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --min-instances 0 \
         --max-instances 3 \
         --no-allow-unauthenticated \
+        --ingress internal \
         --no-cpu-throttling \
         --port 8080 \
         --vpc-connector ${VPC_CONNECTOR} \
@@ -429,9 +433,11 @@ echo "Deployment Complete!"
 echo "======================================"
 echo "View services: gcloud run services list --region ${REGION}"
 echo ""
-echo "API URL: https://audio-api-<hash>-${REGION}.run.app"
+echo "🔒 SECURITY: API is private (accessible only through Load Balancer)"
+echo "   - Direct Cloud Run URL will return 403 Forbidden"
+echo "   - Access via: https://api.voiceia.danobhub.com"
 echo ""
-echo "Worker Services:"
+echo "Worker Services (internal only):"
 echo "  - Small models (tiny/base/small): audio-worker-small (min=1, max=10, concurrency=4)"
 echo "  - Medium models: audio-worker-medium (min=1, max=5, concurrency=2)"
 echo "  - Large models (v2/v3): audio-worker-large (min=0, max=3, concurrency=1)"
@@ -440,4 +446,3 @@ echo "Queue Routing:"
 echo "  - tiny/base/small → ${QUEUE_SMALL} queue"
 echo "  - medium → ${QUEUE_MEDIUM} queue"
 echo "  - large-v2/large-v3 → ${QUEUE_LARGE} queue"
-echo "  - unknown models → ${QUEUE_DEFAULT} queue (fallback)"

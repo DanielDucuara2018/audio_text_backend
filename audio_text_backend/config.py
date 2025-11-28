@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .utils import build_config_dict, load_configuration, load_configuration_data
 
-ROOT = Path(__file__).parents[1]
+ROOT = Path(__file__).parents[1].resolve()
 
 logger = logging.getLogger(__name__)
 
