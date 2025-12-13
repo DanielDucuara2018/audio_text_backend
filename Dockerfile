@@ -15,21 +15,18 @@ RUN apt-get update -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 # Copy dependency files for better layer caching
-COPY pyproject.toml README.md ./
+COPY pyproject.toml uv.lock README.md ./
 
 # ============================================================================
 # DEPENDENCIES STAGE - Install Python dependencies
 # ============================================================================
 FROM base AS dependencies
 
-# Upgrade pip
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir --upgrade pip
-
-# Install base Python dependencies (API core - without ML/Whisper)
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir --editable .
+# Use --frozen to ensure exact versions from lock file
+RUN uv sync --frozen
 
 # ============================================================================
 # DEV STAGE - Development environment with hot reload
@@ -44,8 +41,7 @@ RUN apt-get update -y && \
     rm -rf /var/lib/apt/lists/*
 
 # Install worker dependencies (faster-whisper) for local testing
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir --editable ".[worker]"
+RUN uv sync --frozen --extra worker
 
 # Copy source code
 COPY . .
@@ -53,7 +49,7 @@ COPY . .
 EXPOSE 3203
 
 # Default command for API dev server with hot reload and debug logging
-CMD ["uvicorn", "audio_text_backend.api.api:app", "--host", "0.0.0.0", "--port", "3203", "--log-level", "debug", "--reload"]
+CMD ["uv", "run", "uvicorn", "audio_text_backend.api.api:app", "--host", "0.0.0.0", "--port", "3203", "--log-level", "debug", "--reload"]
 
 # ============================================================================
 # API PRODUCTION STAGE - Lightweight API without ML libraries
@@ -92,14 +88,9 @@ RUN apt-get update -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir --upgrade pip
-
 # Install core dependencies + ML/worker dependencies (faster-whisper)
-COPY pyproject.toml README.md ./
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-cache-dir --editable ".[worker]"
+# Note: pyproject.toml and uv.lock already copied from base stage
+RUN uv sync --frozen --extra worker
 
 # Copy application code
 COPY audio_text_backend/ ./audio_text_backend/
@@ -111,7 +102,7 @@ RUN chmod +x scripts/start_worker.sh
 
 # Pre-download faster-whisper CTranslate2 models with int8 quantization
 # This prevents downloads during container startup and reduces image size
-RUN python -c "from faster_whisper import WhisperModel; \
+RUN uv run python -c "from faster_whisper import WhisperModel; \
     print('Downloading tiny model...'); \
     WhisperModel('tiny', device='cpu', compute_type='int8'); \
     print('Downloading base model...'); \

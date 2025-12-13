@@ -99,7 +99,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2
+    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2
     profiles: ["default"]
 
   # Dedicated worker for small models (dev multi-queue testing)
@@ -125,7 +125,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=4 -Q audio_small
+    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=4 -Q audio_small
     profiles: ["multi-queue"]
 
   # Dedicated worker for medium models (dev multi-queue testing)
@@ -151,7 +151,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2 -Q audio_medium
+    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2 -Q audio_medium
     profiles: ["multi-queue"]
 
   # Dedicated worker for large models (dev multi-queue testing)
@@ -177,7 +177,7 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    command: celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=1 -Q audio_large
+    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=1 -Q audio_large
     profiles: ["multi-queue"]
 
   # TODO not working yet, connection to redis issue

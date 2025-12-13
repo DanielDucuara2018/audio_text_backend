@@ -13,11 +13,11 @@ CONCURRENCY=${CELERY_CONCURRENCY:-2}
 echo "Starting Celery worker with queue: $QUEUE_NAME, concurrency: $CONCURRENCY"
 
 # Start a simple HTTP server for health checks in the background on port 8080
-python -m http.server ${PORT:-8080} &
+uv run python -m http.server ${PORT:-8080} &
 HTTP_PID=$!
 
-# Start Celery worker with configurable queue and concurrency
-celery -A audio_text_backend.celery.app worker \
+# Start Celery worker with configurable queue and concurrency using UV
+uv run celery -A audio_text_backend.celery.app worker \
     --loglevel=info \
     --concurrency=$CONCURRENCY \
     --max-tasks-per-child=10 \

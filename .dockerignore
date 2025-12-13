@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# UV cache
+.uv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development
+.env
+.env.local
+
+# Docs
+docs/
+
+# CI/CD
+.github/
+
+# Ruff cache
+.ruff_cache/
+
+# Temporary files
+tmp/
+*.tmp
+*.log
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+
+# Keep these files (explicitly not ignored):
+# !pyproject.toml
+# !uv.lock
+# !README.md
