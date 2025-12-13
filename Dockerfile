@@ -15,7 +15,8 @@ RUN apt-get update -y && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Copy only uv binary (uvx not needed for this use case)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
 
 # Copy dependency files for better layer caching
 COPY pyproject.toml uv.lock README.md ./
