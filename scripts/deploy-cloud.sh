@@ -380,7 +380,7 @@ if [[ "$SERVICE" == "worker" || "$SERVICE" == "all" ]]; then
         --platform managed \
         --memory ${WORKER_MEMORY} \
         --cpu ${WORKER_CPU} \
-        --min-instances 0 \
+        --min-instances ${WORKER_MIN_INSTANCES} \
         --max-instances 3 \
         --no-allow-unauthenticated \
         --ingress internal \
