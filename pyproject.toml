@@ -28,10 +28,11 @@ dependencies = [
   "pydantic[email]==2.12.4",
   # Storage and async processing
   "boto3==1.34.0",
-  "celery[redis]==5.3.0",
+  "google-cloud-pubsub>=2.21.0",
   # Database
   "sqlalchemy==2.0.0",
   "alembic==1.13.0",
+  "asyncpg>=0.29.0",
   "psycopg2-binary==2.9.9",
   # Email
   "sendgrid==6.11.0",

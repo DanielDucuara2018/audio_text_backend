@@ -13,15 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class Redis:
-    """Redis configuration for Celery broker/backend and pub/sub."""
-
-    host: str
-    port: int
-    pub_sub_channel: str
-
-
-@dataclass
 class AWS:
     """AWS S3 configuration for file storage."""
 
@@ -29,17 +20,6 @@ class AWS:
     access_key: str
     secret_key: str
     region: str
-
-
-@dataclass
-class Queue:
-    """Celery queue configuration with retry policy."""
-
-    queue_name: str
-    retry_policy_max_retries: int = 3
-    retry_policy_interval_start: int = 0
-    retry_policy_interval_step: int = 60
-    retry_policy_interval_max: int = 300
 
 
 @dataclass
@@ -61,8 +41,7 @@ class Database:
     port: int
     user: str
     ref_table: str
-    force_recreate: bool = False
-    alembic_migration: bool = True
+    skip_alembic_migration: bool = False
 
 
 @dataclass
@@ -97,23 +76,30 @@ class Email:
 
 
 @dataclass
-class Celery:
-    """Celery configuration."""
+class PubSub:
+    """Google Cloud Pub/Sub configuration."""
 
-    queues: dict[str, Queue]
-    serialization_format: str = "json"
-    timezone: str = "UTC"
-    enable_utc: bool = True
-    task_track_started: bool = True
-    task_acks_late: bool = True
-    worker_prefetch_multiplier: int = 1
-    worker_disable_rate_limits: bool = True
-    worker_max_tasks_per_child: int = 10
-    task_time_limit: int = 600
-    task_soft_time_limit: int = 480
-    task_default_retry_delay: int = 60
-    task_max_retries: int = 3
-    worker_autoscaler: str = "celery.worker.autoscale:Autoscaler"
+    project_id: str
+    jobs_topic: str
+    status_topic: str
+    jobs_subscription: str
+    status_subscription: str
+    # Push subscription endpoint for status updates (parameterised per environment)
+    api_push_endpoint: str
+    # Per-tier job subscriptions used by Cloud Run Job triggers in production.
+    # Local dev uses the single jobs_subscription for the pull worker.
+    jobs_subscription_small: str = ""
+    jobs_subscription_medium: str = ""
+    jobs_subscription_large: str = ""
+
+
+@dataclass
+class Worker:
+    """Cloud Run Job worker configuration."""
+
+    # Model tier this job instance processes: small | medium | large.
+    # Empty string for local dev (local_worker handles all tiers via a single subscription).
+    tier: str = ""
 
 
 @load_configuration
@@ -123,12 +109,12 @@ class Config:
 
     middleware: Middleware
     database: Database
-    redis: Redis
-    celery: Celery
+    pubsub: PubSub
     aws: AWS
     file: File
     whisper: Whisper
     email: Email
+    worker: Worker
 
 
 def bootstrap_configuration(path: str | Path = ROOT.joinpath("config.ini")) -> None:

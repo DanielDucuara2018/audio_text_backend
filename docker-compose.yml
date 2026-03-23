@@ -30,11 +30,13 @@ services:
       # Prevent Python from writing .pyc files and buffer output
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
+      # Route Pub/Sub calls to the local emulator
+      - PUBSUB_EMULATOR_HOST=audio-text-backend.pubsub:8085
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      pubsub-emulator:
+        condition: service_started
 
   postgres:
     image: postgres:17.1-alpine
@@ -47,6 +49,7 @@ services:
       - 5432:5432
     environment:
       POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: audiotext
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./pgsql/init.d:/docker-entrypoint-initdb.d
@@ -57,27 +60,29 @@ services:
       retries: 3
       start_period: 10s
 
-  redis:
-    image: redis:7-alpine
+  pubsub-emulator:
+    image: gcr.io/google.com/cloudsdktool/google-cloud-cli:emulators
     networks:
       audio_text_bridge:
         ipv4_address: 169.254.9.4
         aliases:
-          - "audio-text-backend.cache"
+          - "audio-text-backend.pubsub"
     ports:
-      - "6379:6379"
-    command: redis-server --appendonly yes --save 60 1000
-    volumes:
-      - redis_data:/data
+      - "8085:8085"
+    environment:
+      - CLOUDSDK_CORE_PROJECT=local-dev
+    command: >
+      gcloud beta emulators pubsub start --host-port=0.0.0.0:8085
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 3
-      start_period: 5s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
 
-  # Default single worker (listens to ALL queues - recommended for simple setups)
-  celery-worker:
+  # Local worker — simulates a Cloud Run Job by pulling from the jobs
+  # subscription and running transcription in-process.
+  local-worker:
     build:
       context: ./
       dockerfile: ./Dockerfile
@@ -86,121 +91,23 @@ services:
       audio_text_bridge:
         ipv4_address: 169.254.9.5
         aliases:
-          - "audio-text-backend.celery"
+          - "audio-text-backend.local-worker"
     volumes:
       - ./audio_text_backend:/app/audio_text_backend
       - ./config.ini:/app/config.ini
+      - /app/audio_text_backend.egg-info/
     env_file:
       - .env
     environment:
-      - C_FORCE_ROOT=true
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
+      - PUBSUB_EMULATOR_HOST=audio-text-backend.pubsub:8085
     depends_on:
-      redis:
+      postgres:
         condition: service_healthy
-    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2
-    profiles: ["default"]
-
-  # Dedicated worker for small models (dev multi-queue testing)
-  celery-worker-small:
-    build:
-      context: ./
-      dockerfile: ./Dockerfile
-      target: dev
-    networks:
-      audio_text_bridge:
-        ipv4_address: 169.254.9.6
-        aliases:
-          - "audio-text-backend.celery-small"
-    volumes:
-      - ./audio_text_backend:/app/audio_text_backend
-      - ./config.ini:/app/config.ini
-    env_file:
-      - .env
-    environment:
-      - C_FORCE_ROOT=true
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-    depends_on:
-      redis:
+      pubsub-emulator:
         condition: service_healthy
-    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=4 -Q audio_small
-    profiles: ["multi-queue"]
-
-  # Dedicated worker for medium models (dev multi-queue testing)
-  celery-worker-medium:
-    build:
-      context: ./
-      dockerfile: ./Dockerfile
-      target: dev
-    networks:
-      audio_text_bridge:
-        ipv4_address: 169.254.9.7
-        aliases:
-          - "audio-text-backend.celery-medium"
-    volumes:
-      - ./audio_text_backend:/app/audio_text_backend
-      - ./config.ini:/app/config.ini
-    env_file:
-      - .env
-    environment:
-      - C_FORCE_ROOT=true
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=2 -Q audio_medium
-    profiles: ["multi-queue"]
-
-  # Dedicated worker for large models (dev multi-queue testing)
-  celery-worker-large:
-    build:
-      context: ./
-      dockerfile: ./Dockerfile
-      target: dev
-    networks:
-      audio_text_bridge:
-        ipv4_address: 169.254.9.8
-        aliases:
-          - "audio-text-backend.celery-large"
-    volumes:
-      - ./audio_text_backend:/app/audio_text_backend
-      - ./config.ini:/app/config.ini
-    env_file:
-      - .env
-    environment:
-      - C_FORCE_ROOT=true
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: uv run celery -A audio_text_backend.celery.app worker --loglevel=info --concurrency=1 -Q audio_large
-    profiles: ["multi-queue"]
-
-  # TODO not working yet, connection to redis issue
-  # flower:
-  #   image: mher/flower:2.0
-  #   networks:
-  #     audio_text_bridge:
-  #       ipv4_address: 169.254.9.8
-  #       aliases:
-  #         - "audio-text-backend.flower"
-  #   ports:
-  #     - "5555:5555"
-  #   environment:
-  #     - CELERY_BROKER_URL=redis://audio-text-backend.cache:6379/0
-  #     - FLOWER_PORT=5555
-  #     - C_FORCE_ROOT="true"
-  #   depends_on:
-  #     redis:
-  #       condition: service_healthy
-  #     celery-worker:
-  #       condition: service_started
-  #   command: celery flower --broker=redis://audio-text-backend.cache:6379/0 --port=5555
+    command: uv run python -m audio_text_backend.cmd.local_worker
 
 volumes:
-  redis_data:
   postgres_data:

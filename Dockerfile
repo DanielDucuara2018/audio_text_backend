@@ -78,7 +78,7 @@ EXPOSE 3203
 CMD ["./scripts/start-api.sh"]
 
 # ============================================================================
-# WORKER PRODUCTION STAGE - Celery worker with faster-whisper
+# WORKER PRODUCTION STAGE - Cloud Run Job worker with faster-whisper
 # ============================================================================
 FROM base AS worker
 
@@ -118,7 +118,6 @@ RUN useradd -m -u 1000 appuser && \
 
 USER appuser
 
-EXPOSE 8080
-
-# Celery worker with health check HTTP server
+# Cloud Run Jobs exit when work is complete — no persistent HTTP port needed.
+# JOB_PAYLOAD env var is injected by Cloud Run Jobs framework before execution.
 CMD ["./scripts/start_worker.sh"]

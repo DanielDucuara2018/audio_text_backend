@@ -1,7 +1,8 @@
 from datetime import date
 from typing import Any, Type, TypeVar, overload
 
-from sqlalchemy import ARRAY, Date, MetaData, cast
+from sqlalchemy import ARRAY, Date, MetaData, cast, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase, Mapped
 from sqlalchemy.orm.decl_api import DeclarativeMeta
 
@@ -26,9 +27,11 @@ class Base(DeclarativeBase):
 
     id: Mapped[str] | None
 
+    # ------------------------------------------------------------------ find --
+
     @overload
     @classmethod
-    def find(
+    async def find(
         cls: Type[T],
         filter_defs: dict[str, Any],
         joins: list[DeclarativeMeta],
@@ -37,24 +40,26 @@ class Base(DeclarativeBase):
 
     @overload
     @classmethod
-    def find(
+    async def find(
         cls: Type[T],
         **filters: Any,
     ) -> list[T]: ...
 
     @classmethod
-    def find(
+    async def find(
         cls: Type[T],
         filter_defs: dict[str, Any] | None = None,
         joins: list[DeclarativeMeta] | None = None,
+        *,
+        session: AsyncSession | None = None,
         **filters: Any,
     ) -> list[T]:
-        with db.session_scope() as session:
-            query = session.query(cls)
+        async def _exec(s: AsyncSession) -> list[T]:
+            stmt = select(cls)
 
             if joins:
                 for jn in joins:
-                    query = query.outerjoin(jn)
+                    stmt = stmt.outerjoin(jn)
 
             for_equality = True
             for key, value in filters.items():
@@ -73,49 +78,94 @@ class Base(DeclarativeBase):
                 is_date = any(isinstance(v, date) for v in value)
 
                 if isinstance(column.type, ARRAY):
-                    filter = column.overlap(value)
+                    filter_expr = column.overlap(value)
                 else:
                     if is_date:
                         column = cast(column, Date)
-                    filter = column.in_(value)
+                    filter_expr = column.in_(value)
 
                 if for_equality:
-                    query = query.filter(filter)
+                    stmt = stmt.where(filter_expr)
                 else:
-                    query = query.filter(~filter)
+                    stmt = stmt.where(~filter_expr)
 
-            return query.all()
+            result = await s.execute(stmt)
+            return list(result.scalars().all())
+
+        if session is not None:
+            return await _exec(session)
+        async with db.session_scope() as s:
+            return await _exec(s)
+
+    # ------------------------------------------------------------------- get --
 
     @classmethod
-    def get(cls: Type[T], **kwargs) -> T:
-        with db.session_scope() as session:
-            query = session.query(cls)
-            if not (result := query.get(kwargs)):
+    async def get(cls: Type[T], *, session: AsyncSession | None = None, **kwargs) -> T:
+        async def _exec(s: AsyncSession) -> T:
+            if "id" in kwargs and len(kwargs) == 1:
+                result = await s.get(cls, kwargs["id"])
+            else:
+                stmt = select(cls)
+                for key, value in kwargs.items():
+                    stmt = stmt.where(getattr(cls, key) == value)
+                result = (await s.execute(stmt)).scalars().first()
+
+            if not result:
                 if error := cls.__errors__.get("_error"):
                     raise error(**kwargs)
                 raise NoDataFound(key=kwargs, messages="No data found in DB")
             return result
 
-    def update(self: T, force_update: bool = False, **kwargs) -> T:
-        with db.session_scope() as session:
-            # Merge the object into the session
-            merged_obj = session.merge(self)
+        if session is not None:
+            return await _exec(session)
+        async with db.session_scope() as s:
+            return await _exec(s)
+
+    # ---------------------------------------------------------------- update --
+
+    async def update(
+        self: T,
+        force_update: bool = False,
+        *,
+        session: AsyncSession | None = None,
+        **kwargs,
+    ) -> T:
+        async def _exec(s: AsyncSession) -> T:
+            merged = await s.merge(self)
             for key, value in kwargs.items():
                 if force_update or value is not None:
-                    setattr(merged_obj, key, value)
-                    # setattr(self, key, value)
-            session.flush()
-        return merged_obj
+                    setattr(merged, key, value)
+            await s.flush()
+            return merged
 
-    def create(self: T) -> T:
-        with db.session_scope() as session:
-            session.add(self)
-            session.flush()
-            session.refresh(self)
-        return self
+        if session is not None:
+            return await _exec(session)
+        async with db.session_scope() as s:
+            return await _exec(s)
 
-    def delete(self: T) -> T:
-        with db.session_scope() as session:
-            merged_obj = session.merge(self)
-            session.delete(merged_obj)
-        return self
+    # ---------------------------------------------------------------- create --
+
+    async def create(self: T, *, session: AsyncSession | None = None) -> T:
+        async def _exec(s: AsyncSession) -> T:
+            s.add(self)
+            await s.flush()
+            await s.refresh(self)
+            return self
+
+        if session is not None:
+            return await _exec(session)
+        async with db.session_scope() as s:
+            return await _exec(s)
+
+    # ---------------------------------------------------------------- delete --
+
+    async def delete(self: T, *, session: AsyncSession | None = None) -> T:
+        async def _exec(s: AsyncSession) -> T:
+            merged = await s.merge(self)
+            await s.delete(merged)
+            return self
+
+        if session is not None:
+            return await _exec(session)
+        async with db.session_scope() as s:
+            return await _exec(s)

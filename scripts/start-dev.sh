@@ -1,51 +1,34 @@
 #!/bin/bash
+# Start the full local development environment using docker-compose.
+#
+# Services started:
+#   app           — FastAPI API server (hot-reload, port 3203)
+#   postgres      — PostgreSQL 17 (port 5432)
+#   pubsub-emulator — Google Cloud Pub/Sub emulator (port 8085)
+#   local-worker  — Pull-based worker simulating Cloud Run Jobs
 
 # Get script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Run populate-env-variables.sh to ensure .env exists
+# Ensure .env exists
 "$SCRIPT_DIR/populate-env-variables.sh"
 
-# If populate script exited (waiting for user to edit .env), stop here
 if [ $? -eq 0 ] && [ ! -s "$SCRIPT_DIR/../.env" ]; then
     exit 0
 fi
 
-# Enable Docker BuildKit for faster builds
 export DOCKER_BUILDKIT=1
 export COMPOSE_DOCKER_CLI_BUILD=1
 
-# Check for multi-queue flag
-MULTI_QUEUE=false
-if [[ "$1" == "--multi-queue" || "$1" == "-m" ]]; then
-    MULTI_QUEUE=true
-fi
-
-echo "🚀 Starting audio-text backend development..."
-echo "   ✅ Docker BuildKit enabled"
-echo ""
-
-# Build and start services
-if [ "$MULTI_QUEUE" = true ]; then
-    echo "🐳 Building with multi-queue workers (small/medium/large)..."
-    docker-compose --profile multi-queue up -d --build
-    WORKER_MODE="multi-queue (small/medium/large queues)"
-else
-    echo "🐳 Building with default single worker (listens to all queues)..."
-    docker-compose --profile default up -d --build
-    WORKER_MODE="single worker (listens to all queues)"
-fi
+echo "Starting audio-text backend development environment..."
+docker-compose up -d --build
 
 echo ""
-echo "✅ Development environment ready!"
+echo "Services ready:"
+echo "  API:            http://localhost:3203"
+echo "  Database:       localhost:5432"
+echo "  Pub/Sub emulator: localhost:8085"
 echo ""
-echo "🌐 Services:"
-echo "   API:      http://localhost:3203"
-echo "   Database: localhost:5432"
-echo "   Redis:    localhost:6379"
-echo "   Workers:  $WORKER_MODE"
-echo ""
-echo "📝 Commands:"
-echo "   Logs: docker-compose logs -f"
-echo "   Stop: docker-compose down"
-echo "   Multi-queue: $0 --multi-queue"
+echo "Commands:"
+echo "  Logs:  docker-compose logs -f"
+echo "  Stop:  docker-compose down"
