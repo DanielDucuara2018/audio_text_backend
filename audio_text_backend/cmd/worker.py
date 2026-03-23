@@ -48,6 +48,11 @@ _TIER_TO_SUBSCRIPTION = {
 def _pull_one_message() -> (
     tuple[pubsub_v1.subscriber.message.Message, JobPayload, pubsub_v1.SubscriberClient, str] | None
 ):
+    """Pull one message synchronously from this tier's pull subscription.
+
+    Returns ``(message, payload, subscriber, subscription_path)`` or ``None``
+    if no message is available within the deadline (spurious trigger — exits 0).
+    """
     tier = Config.worker.tier.lower()
     if tier not in _TIER_TO_SUBSCRIPTION:
         raise RuntimeError(
